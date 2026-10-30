@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenSidekick Settings</title>
+    <link rel="stylesheet" href="../common/ui.css" />
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body class="os-form">
+    <svg hidden aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+      <symbol id="ic-chevron-down" viewBox="0 0 24 24">
+        <path d="M6 9.5l6 6 6-6" />
+      </symbol>
+      <symbol id="ic-plus" viewBox="0 0 24 24">
+        <path d="M12 5.5v13M5.5 12h13" />
+      </symbol>
+      <symbol id="ic-external" viewBox="0 0 24 24">
+        <path d="M14 4.5h5.5V10M19 5l-7.5 7.5" />
+        <path d="M17 14.5v4a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 4 18.5v-10A1.5 1.5 0 0 1 5.5 7h4" />
+      </symbol>
+    </svg>
+
+    <!-- A 56px bar with the brand mark, so Settings reads as the same product
+         as the panel and the website rather than a stray extension page. -->
+    <header class="bar">
+      <div class="bar-inner">
+        <div class="brand">
+          <span class="mark" aria-hidden="true"></span>
+          OpenSidekick
+          <span class="brand-sub">Settings</span>
+        </div>
+        <nav>
+          <a class="txt" href="https://opensidekick.app" target="_blank" rel="noopener">
+            opensidekick.app <svg class="ic"><use href="#ic-external" /></svg>
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/esterhuizen/opensidekick" target="_blank" rel="noopener">
+            Source &amp; docs <svg class="ic"><use href="#ic-external" /></svg>
+          </a>
+        </nav>
+      </div>
+    </header>
+
+    <div class="shell">
+      <nav class="rail" aria-label="Settings sections">
+        <p class="eyebrow">Setup</p>
+        <a href="#sec-providers">Providers</a>
+        <p class="eyebrow">Agent</p>
+        <a href="#sec-behavior">Behavior</a>
+        <a href="#sec-sites">Site permissions</a>
+        <p class="eyebrow">Data</p>
+        <a href="#sec-history">Chat history</a>
+        <a href="#sec-activity">LLM activity</a>
+        <p class="eyebrow">Extras</p>
+        <a href="#sec-prompts">Saved prompts</a>
+        <a href="#sec-sched">Scheduled tasks</a>
+        <a href="#sec-workflows">Workflows</a>
+        <a href="#sec-mcp">MCP tool servers</a>
+        <a href="#smart-checks">Smart checks</a>
+      </nav>
+
+      <main class="content">
+        <p class="lede">
+          Bring your own LLM. Keys are stored locally in this browser and sent
+          only to the provider you choose.
+        </p>
+
+        <section class="card" id="sec-providers">
+          <p class="eyebrow">Setup</p>
+          <h2>Providers</h2>
+          <p class="hint">Add one or more model providers, then pick the one to use.</p>
+
+          <details class="model-help">
+            <summary>
+              <svg class="ic"><use href="#ic-chevron-down" /></svg>
+              Need help choosing a model that works well?
+            </summary>
+            <div class="model-help-body">
+              <p>
+                OpenSidekick drives your browser by <strong>calling tools</strong>
+                and (when Vision is on) <strong>looking at screenshots</strong>, so
+                pick a model that supports both:
+              </p>
+              <ul>
+                <li>
+                  <strong>Tool / function calling — required.</strong> Without it the
+                  agent can't click, type, or navigate at all.
+                </li>
+                <li>
+                  <strong>Vision (image input) — recommended.</strong> It's on by
+                  default. Without it, anything that needs to <em>see</em> the page
+                  (reading an image, a chart, a screenshot) won't work.
+                </li>
+              </ul>
+              <p class="warn">
+                Two things trip people up: (1) within a family, often only a
+                specific variant sees images — e.g. GLM's <code>-V</code> variant or
+                DeepSeek's <code>VL</code> line, not the plain text model. (2) A
+                model can support vision but have <strong>no tool-calling
+                endpoint</strong> — some Qwen-VL endpoints on OpenRouter are like
+                this, so they can see the page but can't act on it. You need
+                <em>both</em>.
+              </p>
+              <p>
+                <strong>Easy picks — tested, tools + vision both work:</strong> the
+                open <code>qwen/qwen3-vl-30b-a3b-instruct</code> is a fast, capable
+                default (use <code>qwen/qwen3-vl-235b-a22b-instruct</code> for more
+                muscle). <code>meta-llama/llama-4-maverick</code>,
+                <code>mistralai/mistral-small-3.2-24b-instruct</code> and
+                <code>google/gemma-3-27b-it</code> also pass.
+              </p>
+              <p>
+                Prefer a closed model? <code>anthropic/claude-sonnet-5.5</code> is
+                the current balanced closed pick.
+              </p>
+              <p>
+                Exploring on your own? Don't match on vision alone — open the
+                <a href="https://openrouter.ai/models" target="_blank" rel="noopener">OpenRouter models list</a>,
+                filter by <strong>Tools</strong> <em>and</em> image support, then
+                paste the id into a provider below and hit <strong>Test</strong> to
+                confirm both live. That beats any name we hard-code, which goes stale.
+              </p>
+            </div>
+          </details>
+
+          <div class="add-row">
+            <select id="preset-select">
+              <option value="">Add a provider…</option>
+            </select>
+            <button id="add-provider" class="btn">Add</button>
+          </div>
+
+          <div id="provider-list" class="provider-list"></div>
+          <p id="no-providers" class="empty-note">No providers yet. Add one above to get started.</p>
+        </section>
+
+        <section class="card" id="sec-behavior">
+          <p class="eyebrow">Agent</p>
+          <h2>Behavior</h2>
+
+          <div class="field">
+            <label>Autonomy</label>
+            <div class="radio-row">
+              <label class="radio"><input type="radio" name="autonomy" value="plan" /> Plan first, then act on approval <span class="chip good">safest</span></label>
+              <label class="radio"><input type="radio" name="autonomy" value="ask" /> Ask before acting on a new site <span class="chip good">safer</span></label>
+              <label class="radio"><input type="radio" name="autonomy" value="auto" /> Act without asking on allowed sites <span class="chip warn">faster</span></label>
+            </div>
+            <p class="hint">Sensitive sites and purchase or delete actions always confirm.</p>
+            <details class="more">
+              <summary>Learn more</summary>
+              <p class="hint">In “Plan first”, the agent proposes its steps and the sites it will use, and waits for your approval before acting. Sensitive sites (banking, payments, crypto) and purchase/delete actions always confirm, regardless of this setting.</p>
+            </details>
+          </div>
+
+          <div class="field">
+            <label for="max-tokens">Max response tokens</label>
+            <input type="number" id="max-tokens" min="256" max="128000" step="256" />
+            <p class="hint">Per model reply. Tasks run until finished — older steps are summarized away when the chat grows long.</p>
+          </div>
+
+          <div class="field">
+            <label for="temperature">Temperature: <span id="temp-value">0.4</span></label>
+            <input type="range" id="temperature" min="0" max="1" step="0.05" />
+            <p class="hint">Lower is more focused. Some models ignore it.</p>
+          </div>
+
+          <div class="field">
+            <label class="radio"><input type="checkbox" id="enable-vision" /> Enable vision (screenshots) <span class="chip good">on by default</span></label>
+            <p class="hint">Lets a vision model see the page. Turn it off for text-only models.</p>
+            <details class="more">
+              <summary>Learn more</summary>
+              <p class="hint">Lets the agent take a screenshot so a vision-capable model (Claude, GPT-4o / 4o-mini, Gemini, Llava…) can see the page — useful for images, canvas apps, or visual layout. On by default; <strong>turn off if you use a text-only model</strong> (it can't accept images and screenshots will fail).</p>
+            </details>
+          </div>
+
+          <div class="field">
+            <label for="thinking">Model thinking</label>
+            <select id="thinking">
+              <option value="auto">Provider default</option>
+              <option value="on">Force reasoning on</option>
+              <option value="off">Disable reasoning</option>
+            </select>
+            <p class="hint">For reasoning models (Qwen3, GLM, Kimi-thinking, Claude, o-series, OpenRouter). "Disable" asks the provider to answer without a thinking pass — faster replies, no hidden reasoning eating your token budget.</p>
+            <details class="more">
+              <summary>Learn more</summary>
+              <p class="hint">Different families switch thinking with different fields; OpenSidekick picks the right one per model and provider (Qwen: <code>enable_thinking</code>, GLM/Kimi: <code>thinking.type</code>, OpenRouter: <code>reasoning.effort</code>, Anthropic: <code>thinking</code>, Ollama: <code>think</code>, vLLM/LM Studio: chat-template kwargs). Models without a known switch — and any provider on "Provider default" — keep behaving exactly as before. If a model still thinks after "Disable", it has no off switch and the setting is a no-op for it.</p>
+            </details>
+          </div>
+
+          <div class="field">
+            <label class="radio"><input type="checkbox" id="enable-js" /> Enable the run-JavaScript tool <span class="chip warn">power user</span></label>
+            <p class="hint">Lets the agent run JavaScript in the page. Leave off unless you need it.</p>
+            <details class="more">
+              <summary>Learn more</summary>
+              <p class="hint">Lets the agent run JavaScript in the page as an escape hatch (still permission-gated per site in “ask” mode). Powerful — enable only if you want it.</p>
+            </details>
+          </div>
+
+          <div class="field">
+            <label class="radio"><input type="checkbox" id="enable-cdp" /> Enable console &amp; network reading and real key input <span class="chip warn">debugger banner</span></label>
+            <p class="hint">Adds read_console / read_network, and sends keys and text as real browser input — required for canvas editors like Google Docs.</p>
+            <details class="more">
+              <summary>Learn more</summary>
+              <p class="hint">Uses Chrome’s debugger to read the console/network of a page and to send trusted key and text input: canvas editors (Google Docs, Figma) ignore synthetic events, so press_keys and type_text need this to affect them. Chrome shows a “debugging this browser” banner while a task runs; it clears when the task ends.</p>
+            </details>
+          </div>
+        </section>
+
+        <section class="card" id="sec-sites">
+          <p class="eyebrow">Agent</p>
+          <h2>Site permissions</h2>
+          <p class="hint">Sites you've allowed or blocked the agent to act on.</p>
+          <div class="radio-row gap-below">
+            <label class="radio"><input type="radio" name="siteAccess" value="all" /> Work on any site <span class="chip">default</span></label>
+            <label class="radio"><input type="radio" name="siteAccess" value="allowlist" /> Only work on sites I allow <span class="chip good">locked down</span></label>
+          </div>
+          <p class="hint">In only-allowed mode the agent asks before any site not listed below, even in Auto.</p>
+          <details class="more">
+            <summary>Learn more</summary>
+            <p class="hint">In "only allowed sites" mode the agent won't read or act on a site that isn't
+              on the list below — it asks first (even in Auto mode). Allow a site from the prompt, from
+              the site chip under the chat box, or here.</p>
+          </details>
+          <div id="perm-list" class="perm-list"></div>
+          <p id="no-perms" class="empty-note">No site rules yet.</p>
+        </section>
+
+        <section class="card" id="sec-history">
+          <p class="eyebrow">Data</p>
+          <h2>Chat history</h2>
+          <div class="field">
+            <label class="radio"><input type="checkbox" id="keep-history" /> Keep chat history on this device <span class="chip">on by default</span></label>
+            <p class="hint">Keeps your 20 most recent chats in this browser so you can reopen them from the side panel. Never sent anywhere.</p>
+            <details class="more">
+              <summary>Learn more</summary>
+              <p class="hint">History keeps what you see in the chat: your messages and the assistant's replies. It doesn't keep screenshots, the page text the assistant read, or the steps it took. A chat that reads or opens a banking, payment or crypto site is never saved. Your prompt history (↑ in the chat box) follows this switch too. Turning it off deletes both; the chat that's open stays until Chrome closes. When you continue a saved chat, its earlier messages are sent to the model you're using now.</p>
+            </details>
+          </div>
+          <div class="field history-row">
+            <span id="history-count" class="hint"></span>
+            <button id="clear-history" class="btn btn-danger small">Clear history</button>
+          </div>
+          <p id="clear-history-status" class="hint" role="status"></p>
+        </section>
+
+        <section class="card" id="sec-activity">
+          <p class="eyebrow">Data</p>
+          <h2>LLM activity</h2>
+          <div class="field">
+            <p class="hint">One entry per model call — kind, model, duration, token usage, errors — kept in a ring of the last 500 calls on this device only. Keys and prompt text are never logged. Download it to let a script or an agent analyze the traffic.</p>
+          </div>
+          <div class="field history-row">
+            <span id="activity-count" class="hint"></span>
+            <button id="download-activity" class="btn small">Download JSON</button>
+            <button id="clear-activity" class="btn btn-danger small">Clear log</button>
+          </div>
+          <p id="activity-status" class="hint" role="status"></p>
+        </section>
+
+        <!-- Extras stay folded until they hold something: a fresh install
+             should read as two short bands, not eight equal cards. -->
+        <details class="card xcard" id="sec-prompts">
+          <summary class="xhead">
+            <span class="eyebrow">Extras</span>
+            <h2>Saved prompts</h2>
+            <svg class="ic xmark"><use href="#ic-chevron-down" /></svg>
+          </summary>
+          <div class="xbody">
+            <p class="hint">Reusable prompts. In the chat, type <code>/</code> to insert one.</p>
+            <div id="prompt-list" class="stack"></div>
+            <p id="no-prompts" class="empty-note">No saved prompts yet.</p>
+            <button id="add-prompt" class="btn btn-ghost small">
+              <svg class="ic"><use href="#ic-plus" /></svg> Add prompt
+            </button>
+          </div>
+        </details>
+
+        <details class="card xcard" id="sec-sched">
+          <summary class="xhead">
+            <span class="eyebrow">Extras</span>
+            <h2>Scheduled tasks</h2>
+            <svg class="ic xmark"><use href="#ic-chevron-down" /></svg>
+          </summary>
+          <div class="xbody">
+            <p class="hint">Run a prompt on a repeating schedule while Chrome is open. Unattended runs act without asking and will not confirm purchases or deletions (those are declined for safety).</p>
+            <div id="sched-list" class="stack"></div>
+            <p id="no-sched" class="empty-note">No scheduled tasks yet.</p>
+            <button id="add-sched" class="btn btn-ghost small">
+              <svg class="ic"><use href="#ic-plus" /></svg> Add scheduled task
+            </button>
+          </div>
+        </details>
+
+        <details class="card xcard" id="sec-workflows">
+          <summary class="xhead">
+            <span class="eyebrow">Extras</span>
+            <h2>Workflows</h2>
+            <svg class="ic xmark"><use href="#ic-chevron-down" /></svg>
+          </summary>
+          <div class="xbody">
+            <p class="hint">Recorded action sequences. Record with the Record button in the side panel's header, then replay them from the Saved workflows menu next to it.</p>
+            <div id="wf-list" class="stack"></div>
+            <p id="no-wf" class="empty-note">No workflows yet.</p>
+          </div>
+        </details>
+
+        <details class="card xcard" id="sec-mcp">
+          <summary class="xhead">
+            <span class="eyebrow">Extras</span>
+            <h2>MCP tool servers</h2>
+            <svg class="ic xmark"><use href="#ic-chevron-down" /></svg>
+          </summary>
+          <div class="xbody">
+            <p class="hint">Connect remote <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener">Model Context Protocol</a> servers so the agent can use their tools alongside the browser (e.g. GitHub, Linear, your own tools). Streamable-HTTP servers only — local stdio servers aren't reachable from a browser extension.</p>
+            <div id="mcp-list" class="stack"></div>
+            <p id="no-mcp" class="empty-note">No MCP servers yet.</p>
+            <button id="add-mcp" class="btn btn-ghost small">
+              <svg class="ic"><use href="#ic-plus" /></svg> Add MCP server
+            </button>
+          </div>
+        </details>
+
+        <details class="card xcard" id="smart-checks">
+          <summary class="xhead">
+            <span class="eyebrow">Extras</span>
+            <h2>Smart checks <span class="chip warn">beta</span></h2>
+            <svg class="ic xmark"><use href="#ic-chevron-down" /></svg>
+          </summary>
+          <div class="xbody">
+            <p class="hint">Optional. Uses TypeSafe's Jev decision model to add fast yes/no safety checks. Off until you pick a key source and turn a check on. Sends short page extracts to the provider you choose — see PRIVACY.md.</p>
+
+            <div class="field">
+              <label class="radio"><input type="checkbox" id="dec-enabled" /> Enable smart checks</label>
+              <p class="hint">Master switch. Each check below is still off until you turn it on.</p>
+            </div>
+
+            <div class="field">
+              <label>Key source</label>
+              <div class="radio-row">
+                <label class="radio"><input type="radio" name="dec-source" value="openrouter" /> Use one of my OpenRouter providers' keys</label>
+                <label class="radio"><input type="radio" name="dec-source" value="typesafe" /> Use a TypeSafe key</label>
+              </div>
+            </div>
+
+            <div class="field" id="dec-provider-field">
+              <label for="dec-provider">OpenRouter provider</label>
+              <select id="dec-provider"></select>
+              <p class="hint" id="dec-provider-hint" hidden>Add an OpenRouter provider under Providers first</p>
+            </div>
+
+            <div class="field" id="dec-key-field">
+              <label for="dec-key">TypeSafe API key <a class="key-link" href="https://console.typesafe.ai" target="_blank" rel="noopener">get one ↗</a></label>
+              <input type="password" id="dec-key" placeholder="Paste your TypeSafe API key" autocomplete="off" />
+            </div>
+
+            <div class="field">
+              <label for="dec-model">Model</label>
+              <input type="text" id="dec-model" placeholder="typesafe/jev-1.13" />
+              <p class="hint">Leave blank to use the default for the key source above.</p>
+            </div>
+
+            <div class="field">
+              <label for="dec-base-url">Endpoint URL (advanced, optional)</label>
+              <input type="text" id="dec-base-url" placeholder="https://openrouter.ai/api/alpha/decisions" />
+              <p class="hint" id="dec-base-url-hint"></p>
+            </div>
+
+            <div class="field">
+              <label for="dec-sensitivity">Sensitivity</label>
+              <select id="dec-sensitivity">
+                <option value="cautious">Cautious</option>
+                <option value="balanced">Balanced</option>
+                <option value="permissive">Permissive</option>
+              </select>
+              <p class="hint">Cautious asks more often</p>
+            </div>
+
+            <div class="field">
+              <label>Checks</label>
+              <label class="radio"><input type="checkbox" id="dec-f-action" /> Check risky actions before acting</label>
+              <p class="hint">Sends this turn's instruction. Keep passwords and card numbers out of the chat.</p>
+              <details class="more">
+                <summary>Learn more</summary>
+                <p class="hint">Asks you first when a click/type/navigate looks like a purchase, payment, deletion or send, even in Auto. Sends your instruction for the current turn (not what gets typed into the page), so don't paste passwords or card numbers into the chat while this is on — an instruction that looks like it carries one is withheld. Unattended scheduled runs can't ask, so a confirmation there stops the task instead.</p>
+              </details>
+              <label class="radio"><input type="checkbox" id="dec-f-injection" /> Classify page text for hidden instructions</label>
+              <p class="hint">Sends up to 60,000 characters of the page, never on bank, payment or crypto sites.</p>
+              <details class="more">
+                <summary>Learn more</summary>
+                <p class="hint">Adds a smarter prompt-injection check on top of the built-in one. Sends up to 60,000 characters of the page just read — never on a sensitive site (banks, payment processors, crypto), where only the built-in check runs.</p>
+              </details>
+              <label class="radio"><input type="checkbox" id="dec-f-change" /> Scheduled tasks: only notify when the result changed</label>
+              <p class="hint">Compares the model's own wording, so a reworded answer can count as a change.</p>
+              <details class="more">
+                <summary>Learn more</summary>
+                <p class="hint">Beta: it compares the model's own wording of the result, so a reworded but unchanged answer can still count as a change. A failed run, and every sixth quiet run, always notifies.</p>
+              </details>
+              <p class="hint" id="dec-features-hint" hidden>Pick a key source with a key in it to turn these on.</p>
+            </div>
+
+            <div class="field">
+              <button id="dec-test" class="btn btn-ghost small" title="Run one live decision request with two known answers">Test</button>
+              <div class="test-status" id="dec-test-status" hidden></div>
+            </div>
+          </div>
+        </details>
+
+        <footer>
+          Keys and history stay in this browser — OpenSidekick has no account and
+          no telemetry. MIT-licensed.
+        </footer>
+      </main>
+    </div>
+
+    <!-- Confirmation belongs next to the eye, not at the bottom of a long
+         scroll where nobody ever saw it. -->
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden>Saved</div>
+
+    <template id="provider-template">
+      <div class="provider" data-id="">
+        <div class="provider-head">
+          <label class="active-radio">
+            <input type="radio" name="active-provider" />
+            <span class="pname"></span>
+          </label>
+          <span class="type-badge"></span>
+          <span class="chip accent active-tag">Active</span>
+          <button class="link-btn delete-provider">Remove</button>
+        </div>
+        <div class="provider-body">
+          <div class="field">
+            <label>Base URL</label>
+            <input type="text" class="base-url" placeholder="https://…/v1" />
+          </div>
+          <div class="field">
+            <label>API key <a class="key-link" target="_blank" rel="noopener" hidden>get one ↗</a></label>
+            <input type="password" class="api-key" placeholder="Paste your API key (leave blank for local models)" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label>Model</label>
+            <div class="model-row">
+              <input type="text" class="model" list="" placeholder="model id" />
+              <button class="btn btn-ghost small fetch-models">Fetch models</button>
+              <button class="btn btn-ghost small test-model" title="Run a quick live check for tool calling and vision">Test</button>
+            </div>
+            <div class="suggest-row" hidden>
+              <span class="suggest-label">Suggested:</span>
+              <span class="suggest-chips"></span>
+              <a class="suggest-link" target="_blank" rel="noopener">This week's picks ↗</a>
+            </div>
+            <datalist></datalist>
+            <p class="hint fetch-status"></p>
+            <!-- role="status" so the automatic model test is announced; the dot
+                 span inside is aria-hidden, so the region is only re-read when a
+                 probe finishes, not three times a second. -->
+            <div class="test-status" role="status" hidden></div>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenSidekick</title>
+    <link rel="stylesheet" href="../common/ui.css" />
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <!-- Icon sprite. Inline SVG is the only way to get real icons into an MV3
+         page without a fetch or a font: no network, no CSP exception. Shapes are
+         stroked in currentColor, so hover and active states need no second copy. -->
+    <svg hidden aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+      <symbol id="ic-record" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="7.5" />
+        <circle cx="12" cy="12" r="3.4" fill="currentColor" stroke="none" />
+      </symbol>
+      <symbol id="ic-workflows" viewBox="0 0 24 24">
+        <circle cx="5" cy="6.5" r="1.4" fill="currentColor" stroke="none" />
+        <circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" />
+        <circle cx="5" cy="17.5" r="1.4" fill="currentColor" stroke="none" />
+        <path d="M9.5 6.5H20M9.5 12H20M9.5 17.5h7" />
+      </symbol>
+      <symbol id="ic-plus" viewBox="0 0 24 24">
+        <path d="M12 5.5v13M5.5 12h13" />
+      </symbol>
+      <symbol id="ic-settings" viewBox="0 0 24 24">
+        <path d="M3.5 7.5h8M15.5 7.5h5M3.5 16.5h5M12.5 16.5h8" />
+        <circle cx="13.5" cy="7.5" r="2.4" />
+        <circle cx="10.5" cy="16.5" r="2.4" />
+      </symbol>
+      <symbol id="ic-stop" viewBox="0 0 24 24">
+        <rect x="7" y="7" width="10" height="10" rx="2" />
+      </symbol>
+      <symbol id="ic-chevron-down" viewBox="0 0 24 24">
+        <path d="M6 9.5l6 6 6-6" />
+      </symbol>
+      <symbol id="ic-alert" viewBox="0 0 24 24">
+        <path d="M10.6 4.2 2.9 17.9A1.6 1.6 0 0 0 4.3 20.3h15.4a1.6 1.6 0 0 0 1.4-2.4L13.4 4.2a1.6 1.6 0 0 0-2.8 0z" />
+        <path d="M12 9.5v4M12 17h.01" />
+      </symbol>
+      <symbol id="ic-shield" viewBox="0 0 24 24">
+        <path d="M12 3.2l7.8 2.8v5.6c0 4.8-3.3 7.9-7.8 8.7-4.5-.8-7.8-3.9-7.8-8.7V6z" />
+        <path d="M9.3 12.1l2 2 3.4-3.6" />
+      </symbol>
+      <symbol id="ic-ban" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="8.2" />
+        <path d="M6.2 17.8 17.8 6.2" />
+      </symbol>
+      <symbol id="ic-dot" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="3.4" />
+      </symbol>
+      <symbol id="ic-play" viewBox="0 0 24 24">
+        <path d="M8 5.2l11 6.8-11 6.8z" fill="currentColor" stroke="none" />
+      </symbol>
+      <symbol id="ic-arrow-right" viewBox="0 0 24 24">
+        <path d="M9 6l6 6-6 6" />
+      </symbol>
+      <symbol id="ic-send" viewBox="0 0 24 24">
+        <path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" />
+      </symbol>
+      <symbol id="ic-history" viewBox="0 0 24 24">
+        <path d="M4.5 12a7.5 7.5 0 1 0 2.4-5.5" />
+        <path d="M4.2 4.8v3.4h3.4" />
+        <path d="M12 8.2v4.1l2.7 1.7" />
+      </symbol>
+      <symbol id="ic-pencil" viewBox="0 0 24 24">
+        <path d="M14.5 5.5l4 4L9 19H5v-4z" />
+        <path d="M12.5 7.5l4 4" />
+      </symbol>
+      <symbol id="ic-trash" viewBox="0 0 24 24">
+        <path d="M4.5 7h15M10 4.5h4M6.5 7l.8 11.2a1.5 1.5 0 0 0 1.5 1.3h6.4a1.5 1.5 0 0 0 1.5-1.3L17.5 7" />
+        <path d="M10 10.5v6M14 10.5v6" />
+      </symbol>
+    </svg>
+
+    <header class="topbar">
+      <div class="brand">
+        <img src="../../icons/icon32.png" alt="" width="20" height="20" />
+        <span>OpenSidekick</span>
+      </div>
+      <div class="topbar-actions">
+        <button id="record-btn" class="icon-btn" title="Record a workflow" aria-label="Record a workflow">
+          <svg class="ic"><use href="#ic-record" /></svg>
+        </button>
+        <button id="workflows-btn" class="icon-btn" title="Saved workflows" aria-label="Saved workflows">
+          <svg class="ic"><use href="#ic-workflows" /></svg>
+        </button>
+        <button id="history-btn" class="icon-btn" title="Chat history" aria-label="Chat history"
+                aria-haspopup="dialog" aria-expanded="false" aria-controls="hist-menu">
+          <svg class="ic"><use href="#ic-history" /></svg>
+        </button>
+        <button id="new-chat" class="icon-btn" title="New chat" aria-label="New chat">
+          <svg class="ic"><use href="#ic-plus" /></svg>
+        </button>
+        <button id="open-settings" class="icon-btn" title="Settings" aria-label="Settings">
+          <svg class="ic"><use href="#ic-settings" /></svg>
+        </button>
+      </div>
+      <!-- Its own line: at 360px the brand and five buttons leave too little
+           room beside them for a model id to be readable. -->
+      <div id="model-line" class="model-line" hidden>
+        <button type="button" id="model-chip" class="chip model-chip"><span class="mc-model"></span><span class="mc-sep" aria-hidden="true">·</span><span class="mc-provider"></span></button>
+      </div>
+    </header>
+
+    <div id="wf-menu" class="wf-menu" hidden></div>
+    <!-- A non-modal dialog, not a menu: rows hold several buttons and an inline
+         rename field. Only .hist-body is re-rendered, so the status line stays
+         put and screen readers announce it. -->
+    <div id="hist-menu" class="wf-menu hist-menu" role="dialog" aria-label="Chat history" tabindex="-1" hidden>
+      <div class="hist-body"></div>
+      <p class="hist-status" role="status"></p>
+    </div>
+    <div id="rec-banner" class="rec-banner" hidden></div>
+    <div id="status-bar" class="status-bar" hidden></div>
+
+    <div class="messages-wrap">
+      <main id="messages" class="messages" aria-live="polite">
+        <!-- One quiet question, anchored just above the composer so the eye
+             lands where the typing happens. -->
+        <div id="empty-state" class="empty-state">
+          <h1 class="empty-title">What should I do on this page?</h1>
+          <p class="empty-sub">I can read, click, type and switch tabs.</p>
+          <ul class="examples" aria-label="Suggestions">
+            <li data-example="Summarize this page in 5 bullet points."><button type="button"><svg class="ic" aria-hidden="true"><use href="#ic-arrow-right" /></svg>Summarize this page in 5 bullets</button></li>
+            <li data-example="Find the main contact email on this page."><button type="button"><svg class="ic" aria-hidden="true"><use href="#ic-arrow-right" /></svg>Find the contact email</button></li>
+            <li data-example="Fill in my name as 'Alex Doe' in the form on this page, but do not submit it."><button type="button"><svg class="ic" aria-hidden="true"><use href="#ic-arrow-right" /></svg>Fill a form (no submit)</button></li>
+          </ul>
+          <p id="not-configured" class="warn" hidden>
+            <svg class="ic"><use href="#ic-alert" /></svg>
+            <span>No model configured yet. <a href="#" id="setup-link">Open Settings</a> to add one.</span>
+          </p>
+        </div>
+      </main>
+      <button type="button" id="jump-latest" class="jump-latest" hidden>
+        Jump to latest
+        <svg class="ic"><use href="#ic-chevron-down" /></svg>
+      </button>
+    </div>
+
+    <form id="composer" class="composer">
+      <div id="slash-menu" class="slash-menu" hidden></div>
+      <div id="site-menu" class="site-menu" hidden></div>
+      <!-- The field is the focal object: Send lives inside it, and the
+           approval control sits directly underneath. -->
+      <div class="composer-field">
+        <textarea id="input" rows="2" placeholder="Ask about or act on this page…"></textarea>
+        <div class="composer-bar">
+          <span class="composer-hint"><kbd>/</kbd> saved prompts</span>
+          <div class="composer-buttons">
+            <button type="button" id="stop-btn" class="stop-btn" hidden>
+              <svg class="ic"><use href="#ic-stop" /></svg>
+              Stop
+            </button>
+            <button type="submit" id="send-btn" class="send-btn btn" aria-label="Send" title="Send (Enter)">
+              <svg class="ic" aria-hidden="true"><use href="#ic-send" /></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="composer-row">
+        <span class="composer-label" aria-hidden="true">Approval</span>
+        <div
+          id="autonomy"
+          class="segmented"
+          role="group"
+          aria-label="Approval mode"
+          title="How much the agent may do before asking you"
+        >
+          <button
+            type="button"
+            class="seg"
+            data-mode="plan"
+            aria-pressed="false"
+            title="Plan first: I outline the steps and wait for your approval before acting (safest)"
+          >
+            Plan
+          </button>
+          <button
+            type="button"
+            class="seg"
+            data-mode="ask"
+            aria-pressed="false"
+            title="Ask first: I confirm before acting on a new site — allow once, always, or decline"
+          >
+            Ask
+          </button>
+          <button
+            type="button"
+            class="seg"
+            data-mode="auto"
+            aria-pressed="false"
+            title="Don't ask: I act without prompting on allowed sites (sensitive sites still confirm)"
+          >
+            Auto
+          </button>
+        </div>
+        <button type="button" id="context-hint" class="site-chip" title="Site rules for this page"></button>
+      </div>
+    </form>
+
+    <!-- Prism (MIT, vendored) loads as scripts: core first, then each language
+         after the ones it requires. -->
+    <script src="../common/vendor/prism/prism-core.min.js"></script>
+    <script src="../common/vendor/prism/prism-clike.min.js"></script>
+    <script src="../common/vendor/prism/prism-javascript.min.js"></script>
+    <script src="../common/vendor/prism/prism-typescript.min.js"></script>
+    <script src="../common/vendor/prism/prism-markup.min.js"></script>
+    <script src="../common/vendor/prism/prism-markdown.min.js"></script>
+    <script src="../common/vendor/prism/prism-json.min.js"></script>
+    <script src="../common/vendor/prism/prism-python.min.js"></script>
+    <script src="../common/vendor/prism/prism-bash.min.js"></script>
+    <script src="../common/vendor/prism/prism-css.min.js"></script>
+    <script src="../common/vendor/prism/prism-yaml.min.js"></script>
+    <script src="../common/vendor/prism/prism-sql.min.js"></script>
+    <script src="../common/vendor/prism/prism-ini.min.js"></script>
+    <script src="../common/vendor/prism/prism-docker.min.js"></script>
+
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>

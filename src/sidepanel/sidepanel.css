@@ -1,0 +1,1483 @@
+/* Side panel. Colour, radius, shadow, type and focus come from
+   ../common/ui.css; this file is layout and panel-specific components only.
+
+   The panel is 320-420px wide, so the rules below assume a single narrow
+   column on paper. Surface (white in light) is spent only on the things you
+   touch or read closely: the composer field, the user's bubbles, cards and
+   menus. Indigo is spent on Send and on the active state, nothing else. */
+
+html {
+  font-size: 14px;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--os-paper);
+  color: var(--os-ink);
+  font-size: var(--os-fs-14);
+  line-height: var(--os-lh-14);
+}
+
+/* Top bar ---------------------------------------------------------------- */
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 1px solid var(--os-line);
+  background: var(--os-paper);
+  flex: 0 0 auto;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: var(--os-w-semibold);
+  font-size: var(--os-fs-14);
+  line-height: var(--os-lh-14);
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 0;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--os-muted);
+  width: 32px;
+  height: 32px;
+  border-radius: var(--os-r);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.icon-btn:hover {
+  background: var(--os-hover);
+  color: var(--os-ink);
+}
+
+.icon-btn.recording {
+  color: var(--os-bad-ink);
+  animation: recpulse 1.2s infinite ease-in-out;
+}
+@keyframes recpulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+/* Which model answers: a second line of the top bar, opens Settings. A quiet
+   outline pill; the ::after stretches the hit area to 32px tall. */
+.model-line {
+  flex: 1 0 100%;
+  display: flex;
+  min-width: 0;
+  padding: 2px 0 4px;
+}
+.model-chip {
+  position: relative;
+  height: 24px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0 8px;
+  gap: 6px;
+  border: 1px solid var(--os-line);
+  border-radius: var(--os-r-pill);
+  background: transparent;
+  color: var(--os-muted);
+  font: inherit;
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  font-weight: var(--os-w-regular);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.model-chip::after {
+  content: "";
+  position: absolute;
+  inset: -4px 0;
+}
+.model-chip:hover {
+  background: var(--os-hover);
+  border-color: var(--os-line-2);
+}
+.model-chip .mc-model {
+  font-family: var(--os-mono);
+  color: var(--os-ink-soft);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-chip .mc-sep {
+  flex: 0 0 auto;
+}
+.model-chip .mc-provider {
+  flex: 0 1 auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Banners -------------------------------------------------------------- */
+
+.status-bar {
+  padding: 6px 12px;
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  color: var(--os-muted);
+  background: var(--os-paper);
+  border-bottom: 1px solid var(--os-line);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.rec-banner {
+  padding: 4px 8px 4px 12px;
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  background: var(--os-bad-soft);
+  border-bottom: 1px solid var(--os-line);
+  color: var(--os-bad-ink);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.rec-banner .rec-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--os-bad);
+  flex: 0 0 auto;
+  animation: recpulse 1.2s infinite ease-in-out;
+}
+.rec-banner .grow {
+  flex: 1;
+}
+.rec-banner button {
+  min-height: 32px;
+  border: 1px solid var(--os-bad);
+  color: var(--os-bad-ink);
+  background: transparent;
+  border-radius: var(--os-r);
+  padding: 0 10px;
+  font: inherit;
+  font-weight: var(--os-w-semibold);
+  cursor: pointer;
+}
+.rec-banner button:hover {
+  background: var(--os-hover);
+}
+
+/* Workflows menu ------------------------------------------------------- */
+
+/* top is set from the top bar's bottom edge when the menu opens. */
+.wf-menu {
+  position: absolute;
+  top: 42px;
+  right: 8px;
+  z-index: 30;
+  background: var(--os-surface);
+  border: 1px solid var(--os-line);
+  border-radius: var(--os-r-lg);
+  box-shadow: var(--os-shadow-2);
+  min-width: 210px;
+  max-width: 290px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.wf-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: var(--os-r);
+  cursor: pointer;
+  font-size: var(--os-fs-13);
+  line-height: var(--os-lh-13);
+}
+.wf-item:hover {
+  background: var(--os-hover);
+}
+.wf-item .wf-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-item .wf-count {
+  font-family: var(--os-mono);
+  font-size: var(--os-fs-12);
+  color: var(--os-muted);
+}
+.wf-empty {
+  padding: 8px;
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  color: var(--os-muted);
+}
+
+/* History: the workflows popover at full width, so titles have room. */
+.hist-menu {
+  left: 8px;
+  right: 8px;
+  max-width: none;
+  max-height: min(420px, calc(100vh - 96px));
+}
+.hist-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px 4px;
+}
+.hist-count {
+  color: var(--os-muted);
+}
+.hist-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.hist-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--os-r);
+}
+.hist-item:hover,
+.hist-item:focus-within {
+  background: var(--os-hover);
+}
+.hist-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--os-r);
+  background: transparent;
+  color: var(--os-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.hist-title {
+  font-size: var(--os-fs-13);
+  line-height: var(--os-lh-13);
+  font-weight: var(--os-w-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hist-item.current .hist-title {
+  color: var(--os-accent-ink);
+  font-weight: var(--os-w-semibold);
+}
+.hist-meta {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  color: var(--os-muted);
+  white-space: nowrap;
+}
+.hist-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+.hist-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--os-mono);
+}
+.hist-item .icon-btn {
+  flex: 0 0 auto;
+}
+.hist-item .hist-delete:hover:not(:disabled) {
+  color: var(--os-bad-ink);
+  background: var(--os-bad-soft);
+}
+.hist-item button:disabled,
+.hist-foot button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.hist-rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 36px;
+  margin: 4px;
+  padding: 0 8px;
+  border: 1px solid var(--os-accent);
+  border-radius: var(--os-r);
+  background: var(--os-surface);
+  color: var(--os-ink);
+  font: inherit;
+  font-size: var(--os-fs-13);
+  box-shadow: 0 0 0 3px var(--os-accent-ring);
+  outline: none;
+}
+.hist-confirm {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: var(--os-fs-13);
+  line-height: var(--os-lh-13);
+  color: var(--os-ink);
+}
+.hist-confirm > span {
+  flex: 1 1 auto;
+}
+/* Clear all's confirm takes the footer's place; the footer already pads it. */
+.hist-foot .hist-confirm {
+  padding: 0;
+}
+.hist-confirm button,
+.hist-off button,
+.hist-foot button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--os-line-2);
+  border-radius: var(--os-r);
+  background: var(--os-surface);
+  color: var(--os-ink);
+  font: inherit;
+  font-size: var(--os-fs-12);
+  font-weight: var(--os-w-semibold);
+  cursor: pointer;
+}
+.hist-confirm button:hover,
+.hist-off button:hover {
+  background: linear-gradient(var(--os-hover), var(--os-hover)) var(--os-surface);
+}
+.hist-confirm button.danger,
+.hist-foot .hist-clear {
+  color: var(--os-bad-ink);
+}
+.hist-confirm button.danger:hover,
+.hist-foot .hist-clear:hover:not(:disabled) {
+  background: var(--os-bad-soft);
+}
+.hist-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 6px 2px 2px 8px;
+  border-top: 1px solid var(--os-line);
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  color: var(--os-muted);
+}
+.hist-foot .hist-note {
+  flex: 1 1 auto;
+}
+.hist-foot .hist-clear {
+  border-color: transparent;
+  background: transparent;
+}
+.hist-busy,
+.hist-empty,
+.hist-off p {
+  margin: 0;
+  padding: 8px;
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  color: var(--os-muted);
+}
+.hist-off {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding-bottom: 4px;
+}
+.hist-off button {
+  margin: 0 8px;
+}
+.hist-status {
+  margin: 0;
+  padding: 4px 8px 2px;
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  color: var(--os-muted);
+}
+.hist-status:empty {
+  display: none;
+}
+
+/* Transcript ----------------------------------------------------------- */
+
+.messages-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.messages {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 16px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* Content fades into the chrome instead of being cut by it. */
+  mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+}
+
+.jump-latest {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  font: inherit;
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  font-weight: var(--os-w-semibold);
+  color: var(--os-ink-soft);
+  background: var(--os-surface);
+  border: 1px solid var(--os-line-2);
+  border-radius: var(--os-r-pill);
+  padding: 0 12px;
+  box-shadow: var(--os-shadow-2);
+  cursor: pointer;
+  z-index: 10;
+}
+.jump-latest:hover {
+  background: linear-gradient(var(--os-hover), var(--os-hover)) var(--os-surface);
+  color: var(--os-ink);
+}
+.jump-latest .ic {
+  width: 14px;
+  height: 14px;
+}
+
+/* Empty state: one quiet question and three suggestions, anchored at the
+   bottom of the transcript (margin-top:auto) so the group sits just above the
+   composer instead of floating in the middle of the void. */
+.empty-state {
+  margin: auto 0 0;
+  padding: 0 0 clamp(16px, 8vh, 64px);
+}
+.empty-title {
+  margin: 0;
+  padding: 0 8px;
+  font-size: var(--os-fs-16);
+  line-height: var(--os-lh-16);
+  font-weight: var(--os-w-semibold);
+  color: var(--os-ink);
+}
+.empty-sub {
+  margin: 4px 0 0;
+  padding: 0 8px;
+  font-size: var(--os-fs-13);
+  line-height: var(--os-lh-13);
+  color: var(--os-muted);
+}
+
+.examples {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.examples li {
+  margin: 0;
+}
+.examples button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--os-r);
+  background: transparent;
+  font: inherit;
+  font-size: var(--os-fs-14);
+  line-height: var(--os-lh-14);
+  color: var(--os-ink-soft);
+  text-align: left;
+  cursor: pointer;
+}
+.examples button .ic {
+  width: 14px;
+  height: 14px;
+  color: var(--os-muted);
+}
+.examples button:hover {
+  background: var(--os-hover);
+  color: var(--os-ink);
+}
+
+#not-configured {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  font-size: var(--os-fs-13);
+  line-height: var(--os-lh-13);
+  background: var(--os-warn-soft);
+  color: var(--os-warn-ink);
+  border-radius: var(--os-r);
+}
+#not-configured .ic {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+}
+#not-configured a {
+  font-weight: var(--os-w-semibold);
+}
+
+/* Messages. The assistant speaks as plain prose on the paper (no card, no
+   bubble), so the answer is the only thing with real contrast. The user's
+   turn is a small surface bubble on the right. */
+.msg {
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+.msg.user {
+  align-self: flex-end;
+  max-width: 85%;
+  background: var(--os-surface);
+  border: 1px solid var(--os-line);
+  border-radius: 12px 12px 4px 12px;
+  padding: 8px 12px;
+  color: var(--os-ink);
+  font-size: var(--os-fs-14);
+  line-height: var(--os-lh-14);
+}
+.msg.assistant {
+  align-self: stretch;
+  color: var(--os-ink);
+  font-size: var(--os-fs-14);
+  line-height: var(--os-lh-prose);
+  /* The renderer owns whitespace. */
+  white-space: normal;
+}
+.msg.assistant :first-child {
+  margin-top: 0;
+}
+.msg.assistant :last-child {
+  margin-bottom: 0;
+}
+.msg.assistant p {
+  margin: 0 0 8px;
+}
+.msg.assistant h1,
+.msg.assistant h2,
+.msg.assistant h3,
+.msg.assistant h4,
+.msg.assistant h5,
+.msg.assistant h6 {
+  font-weight: var(--os-w-semibold);
+  margin: 12px 0 6px;
+}
+.msg.assistant h1 {
+  font-size: var(--os-fs-20);
+  line-height: var(--os-lh-20);
+}
+.msg.assistant h2 {
+  font-size: var(--os-fs-16);
+  line-height: var(--os-lh-16);
+}
+.msg.assistant h3,
+.msg.assistant h4 {
+  font-size: var(--os-fs-14);
+  line-height: var(--os-lh-14);
+}
+.msg.assistant h5,
+.msg.assistant h6 {
+  font-size: var(--os-fs-13);
+  line-height: var(--os-lh-13);
+  color: var(--os-ink-soft);
+}
+.msg.assistant :is(h1, h2, h3, h4, h5, h6) code {
+  font-size: inherit;
+}
+.msg.assistant ul,
+.msg.assistant ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+.msg.assistant li + li {
+  margin-top: 4px;
+}
+.msg.assistant li > ul,
+.msg.assistant li > ol {
+  margin: 4px 0 0;
+}
+.msg.assistant li::marker {
+  color: var(--os-muted);
+}
+.msg.assistant li input[type="checkbox"] {
+  accent-color: var(--os-muted);
+  margin: 0 6px 0 0;
+  vertical-align: -1px;
+}
+.msg.assistant blockquote {
+  border-left: 2px solid var(--os-line-2);
+  color: var(--os-ink-soft);
+  margin: 0 0 8px;
+  padding-left: 12px;
+}
+.msg.assistant hr {
+  border: 0;
+  height: 1px;
+  background: var(--os-line-2);
+  margin: 12px 0;
+}
+/* markdown-it emits <s>; <del> is the semantic equivalent. */
+.msg.assistant s,
+.msg.assistant del {
+  color: var(--os-muted);
+}
+.msg.assistant strong {
+  font-weight: var(--os-w-semibold);
+}
+/* An image the panel will not fetch: the marker is quieter than the prose around it. */
+.msg.assistant .md-image {
+  color: var(--os-ink-soft);
+}
+.msg.assistant a {
+  color: var(--os-accent-ink);
+  /* Colour alone does not tell a link from text, so links are underlined like every
+     other link in the UI. Focus is the panel's standard :focus-visible outline. */
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.msg.assistant code {
+  font-family: var(--os-mono);
+  font-size: var(--os-fs-12);
+  background: var(--os-sunken);
+  border-radius: var(--os-r-sm);
+  padding: 1px 4px;
+}
+
+/* Code block: a banner with the fence language and the copy control, the code as a scrollport. */
+.msg.assistant .md-code {
+  border: 1px solid var(--os-line);
+  border-radius: var(--os-r);
+  background: var(--os-surface);
+  margin: 0 0 8px;
+  overflow: hidden;
+}
+.msg.assistant .md-code-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 1px solid var(--os-line);
+  font-family: var(--os-mono);
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  color: var(--os-muted);
+}
+.msg.assistant .md-code-banner:only-child {
+  border-bottom: 0;
+}
+.msg.assistant .md-copy {
+  font: inherit;
+  font-size: var(--os-fs-12);
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid var(--os-line-2);
+  border-radius: var(--os-r-sm);
+  background: var(--os-surface);
+  color: var(--os-ink-soft);
+  cursor: pointer;
+}
+.msg.assistant .md-copy:hover {
+  background: var(--os-hover);
+}
+/* aria-disabled, not the disabled attribute: a disabled button cannot keep
+   keyboard focus, and focus has to survive the re-render. */
+.msg.assistant .md-copy[aria-disabled="true"] {
+  cursor: default;
+  border-color: var(--os-line);
+}
+/* Copied is good news and Failed is not, so they get their own colours: the
+   disabled state used to be drawn in the success green for both. */
+.msg.assistant .md-copy[data-state="ok"] {
+  color: var(--os-good-ink);
+}
+.msg.assistant .md-copy[data-state="fail"] {
+  color: var(--os-bad-ink);
+}
+.msg.assistant .md-code pre {
+  margin: 0;
+  padding: 8px 12px;
+  background: none;
+  border: 0;
+  font-family: var(--os-mono);
+  font-size: var(--os-fs-12);
+  line-height: 18px;
+  overflow-x: auto;
+  white-space: pre;
+}
+/* The code frame clips an outward ring (overflow: hidden), so the standard
+   2px accent outline sits inside the scrollport instead. */
+.msg.assistant .md-code pre:focus-visible {
+  outline-offset: -2px;
+}
+.msg.assistant .md-code pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+/* Prism's token classes, mapped to the theme's code colours. */
+.msg.assistant .md-code .token.comment,
+.msg.assistant .md-code .token.prolog,
+.msg.assistant .md-code .token.cdata,
+.msg.assistant .md-code .token.doctype {
+  color: var(--os-tok-comment);
+  font-style: italic;
+}
+.msg.assistant .md-code .token.keyword,
+.msg.assistant .md-code .token.class-name,
+.msg.assistant .md-code .token.decorator {
+  color: var(--os-tok-key);
+}
+.msg.assistant .md-code .token.string,
+.msg.assistant .md-code .token.char,
+.msg.assistant .md-code .token.attr-value,
+.msg.assistant .md-code .token.regex {
+  color: var(--os-tok-string);
+}
+.msg.assistant .md-code .token.number,
+.msg.assistant .md-code .token.boolean,
+.msg.assistant .md-code .token.constant,
+.msg.assistant .md-code .token.symbol {
+  color: var(--os-tok-number);
+}
+.msg.assistant .md-code .token.function,
+.msg.assistant .md-code .token.method {
+  color: var(--os-tok-func);
+}
+.msg.assistant .md-code .token.operator,
+.msg.assistant .md-code .token.punctuation,
+.msg.assistant .md-code .token.variable,
+.msg.assistant .md-code .token.property,
+.msg.assistant .md-code .token.delimiter,
+.msg.assistant .md-code .token.separator {
+  color: var(--os-tok-punct);
+}
+.msg.assistant .md-code .token.tag,
+.msg.assistant .md-code .token.selector,
+.msg.assistant .md-code .token.attr-name,
+.msg.assistant .md-code .token.builtin,
+.msg.assistant .md-code .token.url,
+.msg.assistant .md-code .token.important,
+.msg.assistant .md-code .token.directive {
+  color: var(--os-tok-tag);
+}
+
+/* Tables scroll inside their own box so a wide table cannot widen the panel. */
+.msg.assistant .md-table {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  margin: 0 0 8px;
+  border: 1px solid var(--os-line);
+  border-radius: var(--os-r);
+  background: var(--os-surface);
+}
+.msg.assistant table {
+  border-collapse: collapse;
+  width: max-content;
+}
+.msg.assistant th,
+.msg.assistant td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--os-line);
+  font-size: var(--os-fs-13);
+  line-height: var(--os-lh-13);
+  min-width: 70px;
+  max-width: 200px;
+}
+.msg.assistant th {
+  font-weight: var(--os-w-semibold);
+  border-bottom-color: var(--os-line-2);
+}
+.msg.assistant tr:last-child td {
+  border-bottom: 0;
+}
+.msg.assistant table code {
+  font-size: var(--os-fs-12);
+}
+
+/* Tool log. A run is a log, not a stack of cards: one rule, one dot per
+   action, status in the dot only. Consecutive actions collapse under a
+   single header so a 10-step run reads as one object. */
+.log {
+  align-self: stretch;
+  font-size: var(--os-fs-12);
+  line-height: 18px;
+}
+.log-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--os-muted);
+  min-height: 32px;
+  padding: 0 8px;
+  margin-left: -8px;
+  border-radius: var(--os-r);
+  width: fit-content;
+}
+.log-head::-webkit-details-marker {
+  display: none;
+}
+.log-head:hover {
+  background: var(--os-hover);
+  color: var(--os-ink-soft);
+}
+.log-head .ic {
+  width: 14px;
+  height: 14px;
+  transition: transform 120ms ease;
+}
+.log[open] > .log-head .ic {
+  transform: rotate(180deg);
+}
+.log-head .log-sum {
+  font-family: var(--os-mono);
+  font-size: var(--os-fs-12);
+}
+
+.log-rows {
+  margin: 0 0 0 5px;
+  padding-left: 18px;
+  border-left: 1px solid var(--os-line);
+}
+.log-row {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  color: var(--os-muted);
+}
+.log-dot {
+  position: absolute;
+  left: -21.5px;
+  top: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--os-line-2);
+  box-shadow: 0 0 0 2px var(--os-paper);
+}
+.log-row.ok .log-dot {
+  background: var(--os-good);
+}
+.log-row.err .log-dot {
+  background: var(--os-bad);
+}
+.log-row.running .log-dot {
+  background: var(--os-accent);
+  animation: pulse 1s infinite ease-in-out;
+}
+.log-row .tool-name {
+  font-family: var(--os-mono);
+  font-size: var(--os-fs-12);
+  color: var(--os-ink-soft);
+  flex: 0 0 auto;
+}
+.log-row .tool-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-row .log-dur {
+  flex: 0 0 auto;
+  font-family: var(--os-mono);
+  font-size: var(--os-fs-12);
+  color: var(--os-muted);
+}
+
+/* Notes and alerts: single quiet lines, not pills. */
+.note {
+  align-self: stretch;
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  color: var(--os-muted);
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.note .ic {
+  width: 14px;
+  height: 14px;
+  position: relative;
+  top: 2px;
+}
+.note .note-action {
+  flex: 0 0 auto;
+  margin-left: auto;
+  align-self: center;
+  min-height: 32px;
+  border: 1px solid var(--os-line-2);
+  background: var(--os-surface);
+  color: var(--os-ink);
+  border-radius: var(--os-r);
+  padding: 0 12px;
+  font: inherit;
+  font-size: var(--os-fs-12);
+  font-weight: var(--os-w-semibold);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.note .note-action:hover {
+  background: linear-gradient(var(--os-hover), var(--os-hover)) var(--os-surface);
+}
+
+.alert {
+  align-self: stretch;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--os-fs-13);
+  line-height: var(--os-lh-13);
+  padding: 8px 12px;
+  border-radius: var(--os-r);
+}
+.alert .ic {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+}
+.alert.bad {
+  background: var(--os-bad-soft);
+  color: var(--os-bad-ink);
+}
+.alert.warn {
+  background: var(--os-warn-soft);
+  color: var(--os-warn-ink);
+}
+
+/* Permission / plan / MCP / save cards: the decision points. A raised surface
+   on the paper, no tint and no rail; the primary button carries the accent. */
+.perm-card {
+  align-self: stretch;
+  border: 1px solid var(--os-line-2);
+  border-radius: var(--os-r-lg);
+  padding: 12px;
+  background: var(--os-surface);
+  color: var(--os-ink);
+  box-shadow: var(--os-shadow-1);
+}
+.perm-card.sensitive {
+  border-color: var(--os-bad);
+}
+.perm-card.sensitive h3 {
+  color: var(--os-bad-ink);
+}
+.perm-card h3 {
+  margin: 0 0 4px;
+  font-size: var(--os-fs-14);
+  line-height: var(--os-lh-14);
+  font-weight: var(--os-w-semibold);
+}
+.perm-card p {
+  margin: 0 0 12px;
+  font-size: var(--os-fs-13);
+  line-height: var(--os-lh-13);
+  color: var(--os-ink-soft);
+}
+.perm-card .origin {
+  font-family: var(--os-mono);
+  font-size: var(--os-fs-12);
+  background: var(--os-sunken);
+  color: var(--os-ink);
+  border-radius: var(--os-r-sm);
+  padding: 1px 4px;
+}
+.perm-card .muted-note {
+  margin: 0;
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  color: var(--os-muted);
+}
+.perm-card .muted-note:not(:last-child) {
+  margin-bottom: 12px;
+}
+.perm-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.perm-buttons button {
+  min-height: 32px;
+  border: 1px solid var(--os-line-2);
+  background: var(--os-surface);
+  color: var(--os-ink);
+  border-radius: var(--os-r);
+  padding: 0 12px;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--os-fs-13);
+  font-weight: var(--os-w-semibold);
+}
+.perm-buttons button:hover:not(:disabled) {
+  background: linear-gradient(var(--os-hover), var(--os-hover)) var(--os-surface);
+}
+.perm-buttons button.primary {
+  background: var(--os-accent);
+  color: var(--os-on-accent);
+  border-color: var(--os-accent);
+}
+.perm-buttons button.primary:hover:not(:disabled) {
+  background: var(--os-accent-hover);
+  border-color: var(--os-accent-hover);
+}
+.perm-buttons button.danger {
+  color: var(--os-bad-ink);
+}
+.perm-buttons button.danger:hover:not(:disabled) {
+  background: var(--os-bad-soft);
+}
+.perm-buttons button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.plan-steps {
+  margin: 4px 0 12px;
+  padding-left: 20px;
+  font-size: var(--os-fs-13);
+  line-height: var(--os-lh-13);
+}
+.plan-steps li {
+  margin: 4px 0;
+}
+.plan-domains {
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  margin-bottom: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.plan-domains-label {
+  color: var(--os-muted);
+}
+.domain-chip {
+  font-family: var(--os-mono);
+  font-size: var(--os-fs-12);
+  background: var(--os-sunken);
+  color: var(--os-ink-soft);
+  border: 0;
+  border-radius: var(--os-r-sm);
+  padding: 1px 4px;
+}
+.wf-name-input {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--os-line-2);
+  border-radius: var(--os-r);
+  background: var(--os-surface);
+  color: var(--os-ink);
+  font: inherit;
+  margin-bottom: 8px;
+}
+.wf-name-input:focus {
+  outline: none;
+  border-color: var(--os-accent);
+  box-shadow: 0 0 0 3px var(--os-accent-ring);
+}
+
+.thinking {
+  color: var(--os-muted);
+  font-size: var(--os-fs-13);
+  line-height: var(--os-lh-13);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.dot-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--os-accent);
+  flex: 0 0 auto;
+  animation: pulse 1s infinite ease-in-out;
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Composer: the panel's focal object. One field (textarea + a bar holding the
+   "/" hint and Send), then the approval control and the site chip under it. */
+.composer {
+  flex: 0 0 auto;
+  padding: 4px 12px 12px;
+  background: var(--os-paper);
+  position: relative;
+}
+
+.composer-field {
+  background: var(--os-surface);
+  border: 1px solid var(--os-line-strong); /* 3:1 control boundary, like every other field */
+  border-radius: var(--os-r-lg);
+  box-shadow: var(--os-shadow-1);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.composer-field:has(textarea:focus-visible) {
+  border-color: var(--os-accent);
+  box-shadow: 0 0 0 3px var(--os-accent-ring);
+}
+
+.composer textarea {
+  display: block;
+  width: 100%;
+  resize: none;
+  border: 0;
+  background: transparent;
+  padding: 10px 12px 0;
+  font: inherit;
+  font-size: var(--os-fs-14);
+  line-height: var(--os-lh-14);
+  color: var(--os-ink);
+  min-height: 50px;
+  max-height: 160px;
+  outline: none;
+}
+.composer textarea::placeholder {
+  color: var(--os-muted);
+}
+
+.composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 6px 12px;
+}
+.composer-hint {
+  min-width: 0;
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  color: var(--os-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.composer-buttons {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.send-btn {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: var(--os-r);
+}
+.send-btn .ic {
+  width: 16px;
+  height: 16px;
+}
+/* Nothing typed yet: Send goes quiet. Visual only; it is never disabled. */
+.composer-field:has(textarea:placeholder-shown) .send-btn,
+.composer-field:has(textarea:placeholder-shown) .send-btn:hover:not(:disabled) {
+  background: var(--os-sunken);
+  color: var(--os-muted);
+}
+
+.stop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 10px 0 8px;
+  background: var(--os-surface);
+  color: var(--os-bad-ink);
+  border: 1px solid var(--os-line-2);
+  border-radius: var(--os-r);
+  font: inherit;
+  font-size: var(--os-fs-13);
+  font-weight: var(--os-w-semibold);
+  cursor: pointer;
+}
+.stop-btn .ic {
+  width: 14px;
+  height: 14px;
+}
+.stop-btn:hover {
+  background: var(--os-bad-soft);
+}
+
+.composer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.composer-label {
+  flex: 0 0 auto;
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  color: var(--os-muted);
+}
+@media (max-width: 359px) {
+  .composer-label {
+    display: none;
+  }
+}
+
+/* The active segment is raised, not filled, so Send stays the only indigo
+   fill in the panel. */
+.segmented {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 1px;
+  gap: 1px;
+  border-radius: var(--os-r);
+  background: var(--os-sunken);
+}
+.seg {
+  appearance: none;
+  min-height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--os-muted);
+  font: inherit;
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  font-weight: var(--os-w-semibold);
+  cursor: pointer;
+}
+.seg:hover {
+  background: var(--os-hover);
+  color: var(--os-ink-soft);
+}
+.seg.active {
+  background: var(--os-raised);
+  color: var(--os-accent-ink);
+  box-shadow: 0 0 0 1px var(--os-line-2), var(--os-shadow-1);
+}
+
+/* Site chip: right-aligned beside the approval control. The host ellipsizes;
+   the separator and the rule never do. When the chip is too narrow to show
+   any useful part of the host next to a rule, only the rule is shown. */
+.site-chip {
+  container-type: inline-size;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  border: none;
+  background: transparent;
+  color: var(--os-muted);
+  font: inherit;
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  padding: 0 8px;
+  border-radius: var(--os-r);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.site-chip:empty {
+  visibility: hidden;
+}
+.site-chip:hover {
+  background: var(--os-hover);
+  color: var(--os-ink-soft);
+}
+.site-chip .site-host {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.site-chip .site-sep {
+  flex: none;
+  white-space: pre;
+}
+.site-chip .site-state {
+  flex: none;
+  font-weight: var(--os-w-semibold);
+}
+.site-chip .site-state.ok {
+  color: var(--os-good-ink);
+}
+.site-chip .site-state.blocked {
+  color: var(--os-bad-ink);
+}
+.site-chip .site-state.warn {
+  color: var(--os-warn-ink);
+}
+@container (max-width: 170px) {
+  .site-host:has(+ .site-sep),
+  .site-sep {
+    display: none;
+  }
+}
+
+/* Popovers ------------------------------------------------------------- */
+
+.slash-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 12px;
+  right: 12px;
+  margin-bottom: 4px;
+  padding: 4px;
+  background: var(--os-surface);
+  border: 1px solid var(--os-line);
+  border-radius: var(--os-r-lg);
+  box-shadow: var(--os-shadow-2);
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 20;
+}
+.slash-item {
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: var(--os-r);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+.slash-item.active,
+.slash-item:hover {
+  background: var(--os-hover);
+}
+.slash-cmd {
+  font-family: var(--os-mono);
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  font-weight: var(--os-w-semibold);
+  color: var(--os-ink);
+}
+.slash-preview {
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  color: var(--os-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.slash-empty {
+  padding: 8px;
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  color: var(--os-muted);
+}
+
+/* Opens over the right-aligned site chip that toggles it. */
+.site-menu {
+  position: absolute;
+  bottom: 100%;
+  right: 12px;
+  margin-bottom: 4px;
+  background: var(--os-surface);
+  border: 1px solid var(--os-line);
+  border-radius: var(--os-r-lg);
+  box-shadow: var(--os-shadow-2);
+  min-width: 230px;
+  max-width: calc(100% - 24px);
+  z-index: 25;
+  padding: 4px;
+}
+.site-menu .sm-head {
+  font-family: var(--os-mono);
+  font-size: var(--os-fs-12);
+  line-height: var(--os-lh-12);
+  color: var(--os-muted);
+  padding: 6px 8px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.site-menu button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--os-ink);
+  font: inherit;
+  font-size: var(--os-fs-13);
+  line-height: var(--os-lh-13);
+  padding: 0 8px;
+  border-radius: var(--os-r);
+  cursor: pointer;
+  text-align: left;
+}
+.site-menu button:hover {
+  background: var(--os-hover);
+}
+.site-menu button.current {
+  font-weight: var(--os-w-semibold);
+  color: var(--os-accent-ink);
+}
+
+.warn {
+  color: var(--os-warn-ink);
+}
