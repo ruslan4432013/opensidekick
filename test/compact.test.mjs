@@ -84,6 +84,17 @@ ok(looksLikeContextOverflow("Request exceeds the context window limit"), "matche
 ok(!looksLikeContextOverflow("Failed to fetch"), "network failures are not overflow");
 ok(!looksLikeContextOverflow(""), "empty message is not overflow");
 
+const boardPages = [{ role: "user", content: "Read all works" }];
+for (let i = 0; i < 4; i++) boardPages.push(
+  { role: "assistant", toolCalls: [{ id: String(i), name: "get_page_text", args: { offset: i * 20000 } }] },
+  { role: "tool", toolCallId: String(i), content: "x".repeat(20000) },
+);
+const boardPlan = planCompaction(boardPages);
+ok(!!boardPlan, "large board pages compact before the 20-message limit");
+ok(boardPlan.tail[0].role === "assistant", "large-page compaction keeps tool owners");
+ok(estimateChars(boardPlan.tail) <= 30000, "large-page tail is bounded by characters");
+ok(boardPlan.head.length + boardPlan.tail.length === boardPages.length, "all collected evidence belongs to head or tail");
+
 // --- threshold sanity --------------------------------------------------------
 
 ok(COMPACT_AT_CHARS === 60000, "threshold is 60k chars (≈15k tokens, fits 32k-context models)");

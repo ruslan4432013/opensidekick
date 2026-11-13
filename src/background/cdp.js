@@ -311,6 +311,8 @@ function sendCommand(tabId, method, params) {
 // Trusted mouse input for canvas applications. Always release the button, even
 // when Stop interrupts a drag, so the user's pointer is not left pressed.
 export async function pointerInput(tabId, action, from, to, args = {}, signal) {
+  const button = action === "pan" ? "middle" : "left";
+  const buttons = action === "pan" ? 4 : 1;
   let pressed = false;
   let position = from;
   const send = event => sendCommand(tabId, "Input.dispatchMouseEvent", { ...position, ...event });
@@ -326,16 +328,16 @@ export async function pointerInput(tabId, action, from, to, args = {}, signal) {
       const count = action === "double_click" ? 2 : 1;
       for (let clickCount = 1; clickCount <= count; clickCount++) {
         cancelled();
-        await send({ type: "mousePressed", button: "left", buttons: 1, clickCount });
+        await send({ type: "mousePressed", button, buttons, clickCount });
         pressed = true;
-        if (action === "drag") {
+        if (action === "drag" || action === "pan") {
           for (let step = 1; step <= 8; step++) {
             cancelled();
             position = { x: from.x + (to.x - from.x) * step / 8, y: from.y + (to.y - from.y) * step / 8 };
-            await send({ type: "mouseMoved", button: "left", buttons: 1 });
+            await send({ type: "mouseMoved", button, buttons });
           }
         }
-        await send({ type: "mouseReleased", button: "left", buttons: 0, clickCount });
+        await send({ type: "mouseReleased", button, buttons: 0, clickCount });
         pressed = false;
       }
     }
@@ -343,6 +345,6 @@ export async function pointerInput(tabId, action, from, to, args = {}, signal) {
   } catch (error) {
     return { ok: false, error: error.message || String(error) };
   } finally {
-    if (pressed) await send({ type: "mouseReleased", button: "left", buttons: 0, clickCount: 1 }).catch(() => {});
+    if (pressed) await send({ type: "mouseReleased", button, buttons: 0, clickCount: 1 }).catch(() => {});
   }
 }

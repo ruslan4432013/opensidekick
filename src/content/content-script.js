@@ -13,6 +13,7 @@
   const documentToken = Array.from(crypto.getRandomValues(new Uint32Array(4))).join("-");
   const MAX_ELEMENTS = 200;
   const MAX_TEXT = 8000;
+  let boardSnapshot = null;
 
   // ref id -> element. Rebuilt on every read_page.
   let refMap = new Map();
@@ -35,6 +36,22 @@
   const viewportState = () => ({ width: innerWidth, height: innerHeight, dpr: devicePixelRatio,
     x: scrollX, y: scrollY, scale: visualViewport?.scale || 1,
     offsetX: visualViewport?.offsetLeft || 0, offsetY: visualViewport?.offsetTop || 0 });
+
+  function scrollRegions() {
+    return Array.from(document.querySelectorAll("body *")).filter(el => {
+      if (el.closest("#opensidekick-overlay") || !isVisible(el)) return false;
+      const style = getComputedStyle(el);
+      return /auto|scroll/.test(style.overflowY + style.overflowX) &&
+        (el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1);
+    }).slice(0, 12).map(el => {
+      const r = el.getBoundingClientRect();
+      const x = (Math.max(0, r.left) + Math.min(innerWidth, r.right)) / 2;
+      const y = (Math.max(0, r.top) + Math.min(innerHeight, r.bottom)) / 2;
+      return { label: accessibleName(el).slice(0, 100), x, y,
+        scroll_top: el.scrollTop, max_scroll_top: el.scrollHeight - el.clientHeight,
+        scroll_left: el.scrollLeft, max_scroll_left: el.scrollWidth - el.clientWidth };
+    });
+  }
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     try {
@@ -67,7 +84,8 @@
           return true;
         }
         case "cs_document_token":
-          sendResponse({ ok: true, token: documentToken, url: location.href, viewport: viewportState(), geometry, layout: msg.includeGeometry ? layoutState() : undefined });
+          sendResponse({ ok: true, token: documentToken, url: location.href, viewport: viewportState(), geometry,
+            layout: msg.includeGeometry ? layoutState() : undefined, scroll_regions: msg.includeGeometry ? scrollRegions() : undefined });
           return true;
         case "cs_settled_page":
           settledPage(msg.expectedOrigin).then(sendResponse);
@@ -79,7 +97,10 @@
           sendResponse(readPage());
           return true;
         case "cs_get_text":
-          sendResponse({ ok: true, url: location.href, title: document.title, text: pageText() });
+          readText(msg).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
+          return true;
+        case "cs_navigation_state":
+          navigationState(msg).then(sendResponse);
           return true;
         case "cs_find":
           sendResponse(findText(msg.text));
@@ -180,6 +201,7 @@
       url: location.href,
       title: document.title,
       summary: pageSummary(),
+      ...(isMiroBoard() ? { board_reading: "Use get_page_text for all board objects, including offscreen ones. Follow snapshot_id and next_offset until all_text_delivered. Do not scroll Frames to collect text." } : {}),
       elements,
       note:
         elements.length >= MAX_ELEMENTS
@@ -281,6 +303,129 @@
     if (!root) return "";
     const text = (root.innerText || "").replace(/\n{3,}/g, "\n\n").trim();
     return text.slice(0, MAX_TEXT);
+  }
+
+  function isMiroBoard() {
+    return /(^|\.)miro\.com\.?$/i.test(location.hostname) && location.pathname.startsWith("/app/board/");
+  }
+
+  async function navigationState(msg) {
+    const sample = () => {
+      const target = document.elementFromPoint(msg.x, msg.y);
+      const scroll = [];
+      for (let el = target; el; el = el.parentElement) {
+        if (el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth) {
+          if (!layoutIds.has(el)) layoutIds.set(el, ++nextLayoutId);
+          scroll.push([layoutIds.get(el), el.scrollLeft, el.scrollTop]);
+        }
+      }
+      const board = isMiroBoard() ? document.getElementById("a11y-dom-contents") : null;
+      return { ok: true, target: target ? accessibleName(target).slice(0, 120) : "",
+        state: JSON.stringify({ scroll, viewport: [scrollX, scrollY], board: board?.getAttribute("style") }),
+        observable: scroll.length > 0 || !!board };
+    };
+    let result = sample();
+    if (msg.before && result.state === msg.before) {
+      // Wheel delivery is asynchronous. Wait for a measured change, bounded,
+      // rather than declaring success as soon as CDP accepts the event.
+      const deadline = performance.now() + 600;
+      while (result.state === msg.before && performance.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 30));
+        result = sample();
+      }
+    }
+    return result;
+  }
+
+  // Miro's outline includes offscreen objects. Visibility filters and innerText
+  // lose them, so read this dedicated DOM surface instead of scrolling canvas.
+  async function readText(msg) {
+    if (!isMiroBoard()) return { ok: true, url: location.href, title: document.title, text: pageText() };
+    const root = document.getElementById("a11y-dom-root");
+    const toggle = document.getElementById("a11y-dom-explore");
+    if (!root || !toggle) return { ok: false, error: "Miro's accessible board overview is unavailable. Wait for the board to load; do not repeatedly scroll Frames." };
+    if (toggle.getAttribute("aria-expanded") !== "true") {
+      // Only expand the read-only outline; never select or edit board objects.
+      toggle.click();
+      await new Promise(resolve => {
+        let quiet;
+        const finish = () => { observer.disconnect(); clearTimeout(quiet); clearTimeout(deadline); resolve(); };
+        const ready = () => {
+          if (toggle.getAttribute("aria-expanded") === "true" && document.getElementById("a11y-dom-contents")?.children.length) finish();
+        };
+        const observer = new MutationObserver(() => { clearTimeout(quiet); quiet = setTimeout(ready, 100); });
+        observer.observe(root, { childList: true, subtree: true, attributes: true });
+        const deadline = setTimeout(finish, 2000);
+        quiet = setTimeout(ready, 100);
+      });
+    }
+    const contents = document.getElementById("a11y-dom-contents");
+    if (!contents || toggle.getAttribute("aria-expanded") !== "true") return { ok: false, error: "Could not expand Miro's read-only overview." };
+    const records = [], missing = [];
+    const walk = (parent, parentId, x, y) => {
+      const children = Array.from(parent.children).filter(el => /^a11y-dom-(?:\d|comment-)/.test(el.id) && !el.id.endsWith("-heading"));
+      const expected = Math.max(0, ...children.map(el => Number((el.getAttribute("aria-label") || "").match(/, \d+ of (\d+)$/)?.[1] || 0)));
+      if (expected > children.length) missing.push({ parent: parentId, loaded: children.length, expected });
+      for (const el of children) {
+        const id = el.id.replace("a11y-dom-", "");
+        const px = x + (parseFloat(el.style.left) || 0), py = y + (parseFloat(el.style.top) || 0);
+        const label = (el.getAttribute("aria-label") || el.textContent || "").replace(/\s+/g, " ").trim();
+        records.push("[" + id + " parent=" + parentId + " xy=" + Math.round(px) + "," + Math.round(py) + "] " + label);
+        walk(el, id, px, py);
+      }
+      return children.length;
+    };
+    const topLevel = walk(contents, "board", 0, 0);
+    if (!topLevel) return { ok: false, error: "The board overview is empty or still loading. Full-board coverage is not established." };
+    let selected = records;
+    // Stable object IDs let the model recover a specific section after
+    // compaction without replaying every preceding page of the board.
+    if (msg.object_id != null) {
+      const object = document.getElementById("a11y-dom-" + msg.object_id);
+      if (!object || !contents.contains(object) || !object.hasAttribute("aria-label")) return { ok: false, error: "Object ID is not present in this board overview." };
+      const ids = new Set([object.id, ...Array.from(object.querySelectorAll("[id][aria-label]"), el => el.id)]);
+      selected = records.filter(record => ids.has("a11y-dom-" + record.slice(1, record.indexOf(" "))));
+    }
+    const text = selected.join("\n");
+    const fullText = records.join("\n");
+    if (msg.offset != null && (!Number.isInteger(msg.offset) || msg.offset < 0)) return { ok: false, error: "offset must be a non-negative integer." };
+    if (msg.snapshot_id && (!boardSnapshot || boardSnapshot.id !== msg.snapshot_id || boardSnapshot.url !== location.href || boardSnapshot.text !== fullText)) {
+      return { ok: false, error: "Board snapshot changed or expired. Restart get_page_text with offset:0 and no snapshot_id." };
+    }
+    if (!boardSnapshot || boardSnapshot.text !== fullText || boardSnapshot.url !== location.href || !msg.snapshot_id && boardSnapshot.session !== msg.reading_session) {
+      boardSnapshot = { id: documentToken + ":" + crypto.randomUUID(), url: location.href, session: msg.reading_session, text: fullText, scopes: new Map() };
+    }
+    const scope = msg.object_id || "board";
+    if (!boardSnapshot.scopes.has(scope)) boardSnapshot.scopes.set(scope, { next: 0, reads: new Map(), rereads: new Set(), ranges: [] });
+    const snapshot = boardSnapshot.scopes.get(scope);
+    const offset = msg.offset ?? (msg.snapshot_id ? snapshot.next : 0);
+    if (offset > text.length) return { ok: false, error: "offset exceeds snapshot length.", total_chars: text.length };
+    let end = Math.min(offset + 20000, text.length);
+    // Escaped labels must also fit the agent's bounded tool-result envelope.
+    while (JSON.stringify(text.slice(offset, end)).length > 22000) end = offset + Math.floor((end - offset) * 0.9);
+    const reads = (snapshot.reads.get(offset) || 0) + 1;
+    snapshot.reads.set(offset, reads);
+    const repeated = reads > 1;
+    const replayed = repeated && msg.reread === true && !snapshot.rereads.has(offset);
+    if (replayed) snapshot.rereads.add(offset);
+    if (!repeated) snapshot.ranges.push([offset, end]);
+    // Calls may arrive out of order. Count only contiguous delivered coverage,
+    // but cross an already delivered page once the preceding gap is filled.
+    for (const [start, stop] of snapshot.ranges.sort((a, b) => a[0] - b[0])) {
+      if (start > snapshot.next) break;
+      snapshot.next = Math.max(snapshot.next, stop);
+    }
+    return { ok: true, source: "miro_accessible_board", url: location.href, title: document.title,
+      scope: msg.object_id ? "object" : "whole_board", object_id: msg.object_id,
+      selected_objects: selected.length,
+      snapshot_id: boardSnapshot.id, offset, next_offset: end < text.length ? end : null,
+      next_unread_offset: snapshot.next < text.length ? snapshot.next : null,
+      done: end === text.length, all_text_delivered: snapshot.next === text.length,
+      total_chars: text.length, top_level_objects: topLevel, objects_including_children: records.length,
+      outline_complete: missing.length === 0, missing_groups: missing,
+      text: repeated && !replayed ? "" : text.slice(offset, end), repeated, replayed,
+      note: repeated && !replayed ? "This page was already returned. Continue at next_unread_offset or finish if null. If context compaction lost necessary facts, one explicit reread:true is allowed per offset. Do not repeat navigation."
+        : "Read all pages using snapshot_id and next_offset (and the same object_id if scoped). done/all_text_delivered apply to the selected scope only. IDs preserve hierarchy; xy are BOARD coordinates for grouping, NOT pointer coordinates. Recover lost section details with object_id. Images, embeds and unexpanded grids may only expose labels; do not claim their contents were read. Summarize each page's facts before continuing." };
   }
 
   // find: count occurrences of text on the page, scroll to (and select) the

@@ -4,7 +4,7 @@
 
 import { normalizeTarget } from "./permissions.js";
 import { MSG } from "../common/constants.js";
-import { readConsole, readNetwork, isAttached, sendKeyEvents, insertText, pointerInput } from "./cdp.js";
+import { readConsole, readNetwork, isAttached, ensureAttached, sendKeyEvents, insertText, pointerInput } from "./cdp.js";
 
 export function isMiroUrl(url) {
   try {
@@ -13,7 +13,7 @@ export function isMiroUrl(url) {
   } catch { return false; }
 }
 
-export const MIRO_INPUT_GUIDANCE = "On Miro, run_javascript is unavailable. Use take_screenshot, then pointer_action with that screenshot_id for clicks, double-clicks and drags. Coordinates are pixels in the original screenshot: do not divide by DPR or apply Miro's canvas zoom yourself. Use insert_text for the focused editor and press_keys for keyboard input. Take a new screenshot after panning, zooming or an uncertain UI change, and verify the visible result. If pointer_action is unavailable, ask to enable Advanced automation and Vision; do not emulate clicks with JavaScript.";
+export const MIRO_INPUT_GUIDANCE = "On Miro, for reading or summarizing FIRST use get_page_text(offset:0), then follow snapshot_id and next_offset until all_text_delivered. It includes offscreen objects and nested frames; the Frames sidebar and viewport are NOT the full board. Do not scroll, find or repeat screenshots to collect text. Preserve per-page facts and IDs. Report missing_groups and image/embed/grid limitations honestly. For navigation, scroll uses wheel events over the actual panel; pan uses middle-button dragging on canvas without moving objects. If changed:false, retarget from a fresh screenshot instead of repeating. On Miro, run_javascript is unavailable. Use take_screenshot, then pointer_action with that screenshot_id for clicks, double-clicks and drags. Coordinates are pixels in the original screenshot: do not divide by DPR or apply Miro's canvas zoom yourself. Use insert_text for the focused editor and press_keys for keyboard input. Take a new screenshot after panning, zooming or an uncertain UI change, and verify the visible result. If pointer_action is unavailable, ask to enable Advanced automation and Vision; do not emulate clicks with JavaScript.";
 
 export const TOOL_DEFS = [
   {
@@ -29,8 +29,10 @@ export const TOOL_DEFS = [
     name: "get_page_text",
     description:
       "Get the full readable text content of the current page (article/main text). " +
-      "Use for reading, summarizing, or extracting information.",
-    parameters: { type: "object", properties: {}, additionalProperties: false },
+      "On Miro, reads the complete accessible board in pages, including offscreen objects. Start with offset:0; continue with snapshot_id and next_offset until all_text_delivered. Never scroll to get the next text page.",
+    parameters: { type: "object", properties: { offset: { type: "integer", minimum: 0 }, snapshot_id: { type: "string" },
+      object_id: { type: "string", description: "Miro object ID from the board text. Read only that object and its descendants to recover details without rereading the whole board. Coverage then applies only to this object." },
+      reread: { type: "boolean", description: "Miro only: recover a previously read page after context compaction. At most one explicit reread per page." } }, additionalProperties: false },
   },
   {
     name: "find",
@@ -348,14 +350,14 @@ export const TOOL_DEFS = [
 const PAGE_ACTIONS = new Set(["click_element", "type_text", "select_option", "form_input", "navigate", "double_click", "right_click", "hover_element", "drag_element", "press_keys", "scroll", "pointer_action", "insert_text", "open_tab", "switch_tab"]);
 const pointerProperties = {
   screenshot_id: { type: "string" },
-  action: { type: "string", enum: ["click", "double_click", "drag", "scroll"] },
+  action: { type: "string", enum: ["click", "double_click", "drag", "pan", "scroll"] },
   x: { type: "number" }, y: { type: "number" },
   to_x: { type: "number" }, to_y: { type: "number" },
   delta_x: { type: "number" }, delta_y: { type: "number" },
 };
 TOOL_DEFS.push({
   name: "pointer_action", visionOnly: true, cdpOnly: true,
-  description: "Trusted pointer action using pixels from a recent viewport screenshot. Stop and take another screenshot if layout, zoom or scroll changes. Drag requires to_x/to_y; scroll uses delta_x/delta_y in CSS pixels.",
+  description: "Trusted pointer action using pixels from a recent viewport screenshot. Stop and take another screenshot if layout, zoom or scroll changes. Drag moves objects with the left button; pan moves canvas with the middle button. Both require to_x/to_y. Scroll uses delta_x/delta_y in CSS pixels at the pointer target. Check changed and a fresh screenshot; sent events alone do not prove movement.",
   parameters: { type: "object", properties: pointerProperties, required: ["screenshot_id", "action", "x", "y"], additionalProperties: false },
 }, {
   name: "insert_text", cdpOnly: true,
@@ -375,6 +377,8 @@ TOOL_DEFS.push({
 
 // Capture validity is private to a task; model-supplied metadata is never trusted.
 const captures = new WeakMap();
+const stalledNavigation = new WeakMap();
+const readingSessions = new WeakMap();
 export async function documentState(ctx, includeGeometry = false) {
   const tabId = await ctx.getTabId();
   const tab = await chrome.tabs.get(tabId);
@@ -402,7 +406,7 @@ export function validateSequence(args, offered = TOOL_DEFS) {
     if (!step || !SEQUENCE_ACTIONS.has(step.name) || !offered.some(t => t.name === step.name)) return "Sequence contains an unavailable action.";
     const definition = TOOL_DEFS.find(t => t.name === step.name);
     if (!validArguments(step.args, definition.parameters)) return `Invalid arguments for ${step.name}.`;
-    if (step.name === "pointer_action" && step.args.action === "drag" &&
+    if (step.name === "pointer_action" && ["drag", "pan"].includes(step.args.action) &&
         ![step.args.to_x, step.args.to_y].every(Number.isFinite)) return "Drag requires destination coordinates.";
   }
   return null;
@@ -456,14 +460,14 @@ async function pointerTarget(ctx, args) {
   };
   try {
     const from = point(args.x, args.y);
-    const to = args.action === "drag" ? point(args.to_x, args.to_y) : null;
+    const to = ["drag", "pan"].includes(args.action) ? point(args.to_x, args.to_y) : null;
     for (const position of [from, ...(to ? [to] : [])]) {
       const atCapture = layoutAt(capture.layout, position);
       if (atCapture !== layoutAt(capture.layoutBefore, position) || atCapture !== layoutAt(state.layout, position)) {
         throw new Error("Screenshot geometry changed at the target. Capture a fresh screenshot.");
       }
     }
-    if (!["click", "double_click", "drag", "scroll"].includes(args.action)) throw new Error("Unknown pointer action.");
+    if (!["click", "double_click", "drag", "pan", "scroll"].includes(args.action)) throw new Error("Unknown pointer action.");
     if (args.action === "scroll" && ![args.delta_x ?? 0, args.delta_y ?? 0].every(Number.isFinite)) throw new Error("Scroll deltas must be finite.");
     const target = await csSend(state.tabId, { type: "cs_inspect_target", x: from.x, y: from.y });
     return { ...target, tabId: state.tabId, from, to };
@@ -536,9 +540,28 @@ async function executeAction(name, args, ctx) {
     case "pointer_action": {
       const target = await pointerTarget(ctx, args);
       if (!target.ok) return target;
+      const navigation = ["scroll", "pan"].includes(args.action);
+      const miro = isMiroUrl((await chrome.tabs.get(target.tabId)).url);
+      if (navigation && miro && (stalledNavigation.get(ctx) || 0) >= 3) {
+        return { ok: false, error: "Stopped navigation after three attempts with no observed movement. Read the board with get_page_text, or finish with the navigation limitation; do not repeat scrolling." };
+      }
+      const message = { type: "cs_navigation_state", ...target.from };
+      const before = navigation ? await csSend(target.tabId, message) : null;
       const result = await pointerInput(target.tabId, args.action, target.from, target.to, args, ctx.signal);
       // Canvas panning may not generate a DOM scroll or resize event.
-      if (args.action === "scroll" || args.action === "drag") captures.delete(ctx);
+      if (navigation || args.action === "drag") captures.delete(ctx);
+      if (navigation && result.ok && !ctx.signal?.aborted) {
+        const after = await csSend(target.tabId, { ...message, before: before?.state });
+        let changed = before?.ok && after?.ok && before.observable ? before.state !== after.state : null;
+        // Miro can repaint its canvas without updating the accessible outline.
+        // Unchanged DOM during a pan is not evidence of a stationary canvas.
+        if (miro && args.action === "pan" && changed === false) changed = null;
+        if (miro && changed !== null) stalledNavigation.set(ctx, changed ? 0 : (stalledNavigation.get(ctx) || 0) + 1);
+        return { ...result, changed, target: before?.target, css_point: target.from,
+          note: changed === false ? "No movement observed. Do not repeat this target: take a new screenshot and retarget the actual scrollable panel, or use pan on canvas. For board text use get_page_text."
+            : changed === null ? "Events sent; movement could not be measured. Verify a fresh screenshot."
+              : "Navigation changed. Capture a fresh screenshot before the next pointer action." };
+      }
       return result;
     }
     case "insert_text": {
@@ -551,7 +574,9 @@ async function executeAction(name, args, ctx) {
     case "read_page":
       return await csSend(await ctx.getTabId(), { type: MSG.CS_READ_PAGE });
     case "get_page_text":
-      return await csSend(await ctx.getTabId(), { type: MSG.CS_GET_TEXT });
+      if (!readingSessions.has(ctx)) readingSessions.set(ctx, crypto.randomUUID());
+      return await csSend(await ctx.getTabId(), { type: MSG.CS_GET_TEXT, offset: args.offset,
+        snapshot_id: args.snapshot_id, reread: args.reread, object_id: args.object_id, reading_session: readingSessions.get(ctx) });
     case "find":
       return await csSend(await ctx.getTabId(), { type: MSG.CS_FIND, text: args.text });
     case "click_element":
@@ -921,6 +946,8 @@ async function screenshot(ctx) {
   }
 
   try {
+    // Attach before measuring: the debugger banner can resize the viewport.
+    if (ctx.cdpAllowed) await ensureAttached(tabId);
     // captureVisibleTab grabs the active tab of the window as a PNG data URL.
     const before = await documentState(ctx, true);
     if (!before.ok || !before.active || before.pending) return { ok: false, error: "Activate the stable target tab before capturing." };
@@ -939,7 +966,9 @@ async function screenshot(ctx) {
     captures.set(ctx, capture);
     return { ok: true, url: tab.url, screenshot_id: capture.id, width: capture.width, height: capture.height,
       viewport: capture.viewport, tab_id: tabId, document_token: capture.token,
-      image: { mediaType: "image/png", data }, note: "Viewport screenshot; pointer coordinates use these image pixels." };
+      scroll_regions: (after.scroll_regions || []).map(region => ({ ...region,
+        x: region.x * capture.width / capture.viewport.width, y: region.y * capture.height / capture.viewport.height })),
+      image: { mediaType: "image/png", data }, note: "Viewport screenshot; pointer coordinates and scroll_regions centers use these image pixels. To scroll a panel, use its scroll_regions center rather than guessing. Canvas navigation uses pan." };
   } catch (e) {
     return {
       ok: false,

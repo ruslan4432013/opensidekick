@@ -68,6 +68,7 @@ Rules:
 - Write the summary in the language of the user's request.
 - Keep each section concise. Use terse, single-line bullets, not prose paragraphs or nested lists.
 - Preserve exact URLs, element refs, selectors, commands, error strings, and identifiers.
+- For paginated board reading preserve snapshot_id, next_unread_offset, coverage counts, and a concise row of facts for EVERY work/section already read. Never replace collected rows with just "read the board".
 - Carry forward only requests that remain unanswered or need further action; do not repeat ones that newer history has resolved.
 - Approaches that were tried and failed belong in Decisions, with the reason, so they are not retried.
 - Do not mention the summary process or that context was compacted.
@@ -116,15 +117,21 @@ export function estimateChars(messages) {
 // boundary is used, but never a leading orphaned tool result. Null when there
 // is nothing worth summarizing.
 export function planCompaction(messages, { keep = KEEP_RECENT } = {}) {
-  if (!Array.isArray(messages) || messages.length <= keep) return null;
-  let cut = messages.length - keep;
+  if (!Array.isArray(messages)) return null;
+  let cut = Math.max(1, messages.length - keep);
+  // A few long board pages can exceed the budget before 20 messages exist.
+  // Bound the retained text too, keeping each assistant/tool exchange intact.
+  const largeTail = estimateChars(messages.slice(cut)) > COMPACT_AT_CHARS / 2;
+  if (largeTail) {
+    while (cut < messages.length - 2 && estimateChars(messages.slice(cut)) > COMPACT_AT_CHARS / 2) cut++;
+  } else if (messages.length <= keep) return null;
   // A tool result must not start the tail: move the owner assistant turn in.
   while (cut > 1 && messages[cut].role === "tool") cut--;
   // Prefer a user-message boundary slightly further back, but never shrink
   // the head to just the original request — that is nothing to summarize.
   let userCut = cut;
   while (userCut > 1 && messages[userCut].role !== "user") userCut--;
-  if (userCut >= 2) cut = userCut;
+  if (!largeTail && userCut >= 2) cut = userCut;
   if (cut < 2) return null;
   return { head: messages.slice(0, cut), tail: messages.slice(cut) };
 }

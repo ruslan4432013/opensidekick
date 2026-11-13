@@ -3,6 +3,13 @@
 All notable changes to OpenSidekick are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.13.0] — 2026-11-14
+
+- Miro board reading now uses the full accessible outline, including offscreen objects and nested frames, with continuation pages and explicit coverage counts. Individual sections can be recovered by object ID after context compaction. Repeated pages are detected instead of silently returning the same truncated text.
+- Canvas navigation has a separate middle-button pan action. Scroll and pan report whether movement was observed, and repeated unsuccessful Miro navigation is stopped.
+- Long board reads compact older evidence by text size, preserve per-work facts, and show a bounded summarization status instead of silently waiting indefinitely.
+- Screenshots include scrollable panel centers and attach advanced automation before measuring the viewport, avoiding coordinate shifts when Chrome displays its debugger banner.
+
 ## [0.12.4] — 2026-11-14
 
 - Select All shortcuts (`Meta+A` / `Cmd+A` / `Control+A`) now send the browser's native editing command with trusted input. Text insertion can replace the full focused field or rich-editor contents instead of inserting at the caret.

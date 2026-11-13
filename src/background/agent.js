@@ -168,7 +168,10 @@ export async function runAgent(deps) {
   // The array is rebuilt in place so every reference the service worker and
   // the save path hold onto it stays valid.
   let overflowCompactions = 0; // compactions forced by a provider rejection
+  let failedCompactionChars = -Infinity;
   const compactConversation = async () => {
+    const size = estimateChars(conversation);
+    if (size < failedCompactionChars + 30000) return false;
     const plan = planCompaction(conversation);
     if (!plan) return false;
     const dropped = conversation.length - plan.tail.length;
@@ -177,39 +180,39 @@ export async function runAgent(deps) {
     const first = conversation[0];
     const task = first && first.role === "user" && typeof first.content === "string" && !first.internal ? first.content : "";
     let summary = "";
+    const compactTimeout = AbortSignal.timeout(60000);
     try {
+      emit({ kind: "note", text: "Summarizing collected evidence before continuing…" });
       const res = await callModel(provider, {
         model: config.activeModel,
-        messages: summaryRequest(conversation),
+        // The retained tail is already available verbatim. Summarizing it
+        // again makes large board reads slow and duplicates their facts.
+        messages: summaryRequest(plan.head),
         maxTokens: 2048,
         temperature: 0,
-        signal,
+        signal: AbortSignal.any([signal, compactTimeout]),
         logKind: "compact",
       });
       summary = (res.content || "").trim();
     } catch (e) {
       if (signal.aborted) throw e; // surfaced by the caller's abort path
-      // Compaction is an optimization, never a reason to lose the run: with
-      // the summarizer unreachable, fall back to a plain sliding window
-      // (the original request plus the recent tail).
+      failedCompactionChars = size;
+      // Never drop collected board evidence when a summarizer times out.
       emit({
         kind: "warning",
-        text: "Couldn't summarize the older steps (" + String(e.message || e).slice(0, 120) + "); continuing with the recent messages only.",
+        text: "Couldn't summarize the older steps (" + String(e.message || e).slice(0, 120) + "); retaining the collected evidence.",
       });
+      return false;
     }
-    // Fallback opener when the summary failed: whatever opened the
-    // conversation before — the original request, or an earlier checkpoint —
-    // still opens it (a previous checkpoint keeps its own summary and
-    // sensitive marker; a plain task message keeps the request itself).
-    const opener = summary ? buildCheckpoint(summary, { sensitive: sawSensitive, task }) : first;
+    if (!summary) { failedCompactionChars = size; return false; }
+    failedCompactionChars = -Infinity;
+    const opener = buildCheckpoint(summary, { sensitive: sawSensitive, task });
     const tail = plan.tail;
     conversation.length = 0;
     conversation.push(opener, ...tail);
     emit({
       kind: "note",
-      text: summary
-        ? "Context compacted: " + dropped + " older messages were summarized into a checkpoint; the last " + tail.length + " stay verbatim."
-        : "Context trimmed: keeping the original request and the last " + tail.length + " messages.",
+      text: "Context compacted: " + dropped + " older messages were summarized into a checkpoint; the last " + tail.length + " stay verbatim.",
     });
     return true;
   };
@@ -1032,6 +1035,8 @@ function pushToolResult(conversation, call, result) {
 function truncateForModel(result, limit = 12000) {
   const s = JSON.stringify(result);
   if (s.length <= limit) return result;
+  // Board pages are bounded; preserve their text and continuation cursor.
+  if (result.source === "miro_accessible_board" && s.length <= 30000) return result;
   // A large final observation must not erase the partial-execution ledger:
   // the model needs this to avoid replaying work that already happened.
   if (Array.isArray(result.results) && Number.isInteger(result.completed)) {
@@ -1052,7 +1057,9 @@ export function summarizeResult(name, r) {
     case "read_page":
       return `read page — ${(r.elements || []).length} interactive elements`;
     case "get_page_text":
-      return `read ${r.text ? r.text.length : 0} chars of text`;
+      return r.source === "miro_accessible_board"
+        ? `${r.scope === "object" ? "object " + r.object_id : "board"} ${r.offset}–${r.offset + r.text.length}/${r.total_chars} chars · ${r.top_level_objects} top-level objects${r.all_text_delivered ? " · all text delivered" : ""}${r.replayed ? " · explicit reread" : r.repeated ? " · repeated page skipped" : ""}`
+        : `read ${r.text ? r.text.length : 0} chars of text`;
     case "click_element":
       return `clicked ${r.clicked || ""}`;
     case "type_text":
