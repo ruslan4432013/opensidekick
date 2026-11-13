@@ -6,6 +6,15 @@ import { normalizeTarget } from "./permissions.js";
 import { MSG } from "../common/constants.js";
 import { readConsole, readNetwork, isAttached, sendKeyEvents, insertText, pointerInput } from "./cdp.js";
 
+export function isMiroUrl(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/\.$/, "");
+    return host === "miro.com" || host.endsWith(".miro.com");
+  } catch { return false; }
+}
+
+export const MIRO_INPUT_GUIDANCE = "On Miro, run_javascript is unavailable. Use take_screenshot, then pointer_action with that screenshot_id for clicks, double-clicks and drags. Coordinates are pixels in the original screenshot: do not divide by DPR or apply Miro's canvas zoom yourself. Use insert_text for the focused editor and press_keys for keyboard input. Take a new screenshot after panning, zooming or an uncertain UI change, and verify the visible result. If pointer_action is unavailable, ask to enable Advanced automation and Vision; do not emulate clicks with JavaScript.";
+
 export const TOOL_DEFS = [
   {
     name: "read_page",
@@ -425,13 +434,20 @@ export async function runSequence(args, { state, interrupted, perform, progress 
   return { ok: !failure, results, completed, stopped_at: failure ? completed : null, ...(failure ? { error: failure } : {}) };
 }
 
+// Compare only boxes covering the intended coordinates. Animated cursors or
+// status indicators elsewhere on a canvas must not invalidate every capture.
+function layoutAt(layout, point) {
+  return JSON.stringify((layout || []).filter(([, x, y, width, height]) =>
+    point.x >= x && point.x < x + width && point.y >= y && point.y < y + height));
+}
+
 async function pointerTarget(ctx, args) {
   if (!ctx.cdpAllowed || !ctx.visionAllowed) return { ok: false, error: "Advanced automation and Vision are required." };
   const capture = captures.get(ctx);
   const state = await documentState(ctx, true);
   if (!capture || capture.id !== args.screenshot_id || !state.ok || !state.active || state.pending ||
       capture.tabId !== state.tabId || capture.token !== state.token || capture.url !== state.url ||
-      JSON.stringify(capture.viewport) !== JSON.stringify(state.viewport) || capture.geometry !== state.geometry || capture.layout !== state.layout) {
+      JSON.stringify(capture.viewport) !== JSON.stringify(state.viewport) || capture.geometry !== state.geometry) {
     return { ok: false, error: "Screenshot is stale or belongs to a different tab. Capture a fresh screenshot." };
   }
   const point = (x, y) => {
@@ -441,6 +457,12 @@ async function pointerTarget(ctx, args) {
   try {
     const from = point(args.x, args.y);
     const to = args.action === "drag" ? point(args.to_x, args.to_y) : null;
+    for (const position of [from, ...(to ? [to] : [])]) {
+      const atCapture = layoutAt(capture.layout, position);
+      if (atCapture !== layoutAt(capture.layoutBefore, position) || atCapture !== layoutAt(state.layout, position)) {
+        throw new Error("Screenshot geometry changed at the target. Capture a fresh screenshot.");
+      }
+    }
     if (!["click", "double_click", "drag", "scroll"].includes(args.action)) throw new Error("Unknown pointer action.");
     if (args.action === "scroll" && ![args.delta_x ?? 0, args.delta_y ?? 0].every(Number.isFinite)) throw new Error("Scroll deltas must be finite.");
     const target = await csSend(state.tabId, { type: "cs_inspect_target", x: from.x, y: from.y });
@@ -822,12 +844,17 @@ async function zoomScreenshot(ctx, args) {
 async function runJavascript(ctx, code) {
   const tabId = await ctx.getTabId();
   try {
+    if (isMiroUrl((await chrome.tabs.get(tabId)).url)) return { ok: false, error: MIRO_INPUT_GUIDANCE };
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       world: "MAIN",
       args: [String(code || "")],
       func: async (src) => {
         try {
+          // Recheck inside the target document: navigation may race injection.
+          if (typeof location !== "undefined" && /(^|\.)miro\.com\.?$/i.test(location.hostname)) {
+            return { ok: false, error: "On Miro use take_screenshot and pointer_action, not run_javascript." };
+          }
           // Pages that enforce Trusted Types via CSP
           // (require-trusted-types-for 'script' — Google Docs and other
           // Google apps) block the Function constructor and DOM string
@@ -900,11 +927,14 @@ async function screenshot(ctx) {
     if (before.viewport.scale !== 1) return { ok: false, error: "Reset browser pinch zoom before capturing actionable coordinates." };
     const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
     const after = await documentState(ctx, true);
-    if (JSON.stringify(before) !== JSON.stringify(after)) return { ok: false, error: "Page changed during capture; retry." };
+    if (!sameDocument(after, before) || before.geometry !== after.geometry ||
+        JSON.stringify(before.viewport) !== JSON.stringify(after.viewport)) {
+      return { ok: false, error: "Page or viewport changed during capture; retry." };
+    }
     const data = dataUrl.split(",")[1];
     const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
     const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-    const capture = { id: crypto.randomUUID(), width: bitmap.width, height: bitmap.height, ...after };
+    const capture = { id: crypto.randomUUID(), width: bitmap.width, height: bitmap.height, ...after, layoutBefore: before.layout };
     bitmap.close();
     captures.set(ctx, capture);
     return { ok: true, url: tab.url, screenshot_id: capture.id, width: capture.width, height: capture.height,

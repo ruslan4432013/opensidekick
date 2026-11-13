@@ -197,6 +197,65 @@ try {
     await page.waitForFunction(() => scrollY > 0);
     assert.equal((await run('pointer_action', { screenshot_id: scrollShot.screenshot_id, action: 'click', x: 10, y: 10 })).ok, false);
     console.log('PASS replaced field, stale ref, screenshot coordinate scaling and trusted scrolling');
+    // Miro-host fixture exercises routing in the real agent, not just the
+    // coordinate helper. Record actual trusted event positions in the page.
+    await page.route('https://miro.com/**', r => r.fulfill({ contentType: 'text/html', body: fixture }));
+    for (const [zoom, imageScale] of [[1, 'device'], [0.8, 'css']]) {
+      await page.goto('https://miro.com/app/board/coordinate-fixture/');
+      await page.evaluate(zoom => {
+        document.body.style.zoom = zoom;
+        window.chrome = { runtime: { onMessage: { addListener: f => window.handleMessage = f } } };
+        window.pointerPositions = [];
+        const status = document.createElement('div'); status.id = 'animated-status'; status.style.cssText = 'position:fixed;left:500px;top:450px;width:10px;height:10px'; document.body.append(status);
+        document.addEventListener('dblclick', e => window.pointerPositions.push({ x: e.clientX, y: e.clientY, trusted: e.isTrusted }), true);
+      }, zoom);
+      await page.addScriptTag({ path: 'src/content/content-script.js' });
+      chrome.tabs.captureVisibleTab = async () => {
+        await page.locator('#animated-status').evaluate(el => el.style.width = (parseInt(el.style.width) + 1) + 'px');
+        return 'data:image/png;base64,' + (await page.screenshot({ scale: imageScale })).toString('base64');
+      };
+      const history = [{ role: 'user', content: 'Edit the first Miro cell' }];
+      let calls = 0;
+      globalThis.fetch = async (_, options) => {
+        const request = JSON.parse(options.body);
+        assert(!request.tools.some(t => t.function.name === 'run_javascript'));
+        assert(request.tools.some(t => t.function.name === 'pointer_action'));
+        assert(request.messages[0].content.includes('On Miro'));
+        const screenshot = history.find(m => m.role === 'tool' && m.name === 'take_screenshot');
+        const shot = screenshot && JSON.parse(screenshot.content);
+        const click = shot && { screenshot_id: shot.screenshot_id, action: 'double_click', x: 150 * zoom * shot.width / width, y: 90 * zoom * shot.height / 600 };
+        const steps = [
+          { name: 'run_javascript', args: { code: 'window.syntheticClick = true' } },
+          { name: 'take_screenshot', args: {} },
+          { name: 'browser_sequence', args: { actions: [
+            { name: 'pointer_action', args: click },
+            { name: 'insert_text', args: { text: 'Miro coordinate test' } },
+            { name: 'press_keys', args: { keys: ['Escape'] } },
+          ] } },
+          { name: 'take_screenshot', args: {} },
+          { name: 'finish', args: { summary: 'Verified' } },
+        ];
+        const call = steps[calls++]; assert(call);
+        return new Response('data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'miro'+calls, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.args) } }] } }] }) + '\n\ndata: [DONE]\n\n');
+      };
+      await runAgent({ conversation: history, initialTabId: dpr, signal: new AbortController().signal,
+        config: { activeModel: 'fixture', settings: { autonomy: 'auto', siteAccess: 'all', enableJsTool: true, enableCdp: true, enableVision: true }, sitePermissions: {} },
+        provider: { name: 'Fixture', baseUrl: 'http://fixture.invalid/v1', type: 'openai' }, emit() {},
+        requestPermission: async () => { throw new Error('Unexpected permission prompt'); },
+      });
+      assert.equal(JSON.parse(history.find(m => m.name === 'run_javascript' && m.role === 'tool').content).ok, false);
+      assert.equal(await page.evaluate(() => !!window.syntheticClick), false);
+      const result = JSON.parse(history.find(m => m.name === 'browser_sequence' && m.role === 'tool').content);
+      assert(result.ok, JSON.stringify(result));
+      assert.equal(await page.inputValue('#cell'), 'Miro coordinate test');
+      assert.equal(await page.$eval('#cell', el => el.readOnly), true);
+      const [actual] = await page.evaluate(() => window.pointerPositions);
+      assert(actual.trusted);
+      assert(Math.abs(actual.x - 150*zoom) <= 1 && Math.abs(actual.y - 90*zoom) <= 1);
+      const denied = await run('run_javascript', { code: 'window.syntheticClick = true' });
+      assert.equal(denied.ok, false);
+      console.log(`PASS Miro routing and actual trusted double click: DPR=${dpr}, zoom=${zoom}, image=${imageScale}, expected=(${150*zoom},${90*zoom}), actual=(${actual.x},${actual.y}); correct cell edited`);
+    }
     await context.close();
   }
 } finally { await browser.close(); }

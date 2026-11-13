@@ -6,7 +6,7 @@ import { recordCall } from "./activity.js";
 // a task can run as long as it needs to.
 
 import { callModel } from "./providers.js";
-import { TOOL_DEFS, executeTool, setOverlay, documentState, validateSequence, runSequence, inspectTarget, sameDocument } from "./tools.js";
+import { TOOL_DEFS, executeTool, setOverlay, documentState, validateSequence, runSequence, inspectTarget, sameDocument, isMiroUrl, MIRO_INPUT_GUIDANCE } from "./tools.js";
 import { evaluate, stricter, applyBatch, MUTATING_TOOLS, PAGE_READ_TOOLS, FOCUS_TOOLS, originOf, hostOf, isSensitive, normalizeTarget } from "./permissions.js";
 import { detectInjection, isSensitiveActionText, looksLikeSecret, INJECTION_NOTE } from "./safety.js";
 import { parsePlan, planToText, hostFromDomain } from "./plan.js";
@@ -323,14 +323,16 @@ export async function runAgent(deps) {
       }
     }
 
+    const miroPage = isMiroUrl(await tabUrl(focusedTabId));
+    const turnTools = miroPage ? tools.filter(tool => tool.name !== "run_javascript") : tools;
     emit({ kind: "assistant_start" });
     let result;
     try {
       result = await callModel(provider, {
         model: config.activeModel,
-        system: SYSTEM_PROMPT + identity.main,
+        system: SYSTEM_PROMPT + identity.main + (miroPage ? "\n\n" + MIRO_INPUT_GUIDANCE : ""),
         messages: conversation,
-        tools,
+        tools: turnTools,
         maxTokens: config.settings.maxTokens,
         temperature: config.settings.temperature,
         thinking: config.settings.thinking,
@@ -461,8 +463,8 @@ export async function runAgent(deps) {
 
         // Only tools offered this run may run: a model can name a tool it was not
         // given (a disabled run_javascript, the debugger readers, screenshots).
-        if (!tools.some((t) => t.name === call.name)) {
-          reportResult(conversation, call, { ok: false, error: `The tool ${call.name} is not available in this task.` });
+        if (!turnTools.some((t) => t.name === call.name)) {
+          reportResult(conversation, call, { ok: false, error: miroPage && call.name === "run_javascript" ? MIRO_INPUT_GUIDANCE : `The tool ${call.name} is not available in this task.` });
           toolEmit({ kind: "tool_end", name: call.name, ok: false, summary: "blocked: tool not offered" });
           return;
         }

@@ -77,6 +77,9 @@ genuinely agentic, and usable with any LLM — including fully local models.**
   changes, take a new screenshot. `pointer_action` never asks for confirmation in any mode, including site-access
   allowlist mode. Explicit site blocks still apply; other tools retain their rules.
   Browser pinch zoom must be reset before capturing actionable screenshots.
+  On Miro, `run_javascript` is unavailable; the agent uses screenshot-based
+  `pointer_action`, `insert_text` and `press_keys` instead. Enable both Vision
+  and Advanced automation for this workflow.
 - **Optional developer tools** — read the page's console messages and network
   requests to debug ("why is this page erroring?"), and a run-JavaScript escape
   hatch for when the other tools aren't enough. Both opt-in in Settings.

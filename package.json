@@ -1,6 +1,6 @@
 {
   "name": "opensidekick",
-  "version": "0.12.2",
+  "version": "0.12.3",
   "private": true,
   "type": "module",
   "description": "Open-source, provider-agnostic AI browser agent Chrome extension. Bring your own LLM.",

@@ -29,8 +29,8 @@
       !el.closest("#opensidekick-overlay") && isVisible(el)).map(el => {
       if (!layoutIds.has(el)) layoutIds.set(el, ++nextLayoutId);
       const r = el.getBoundingClientRect();
-      return [layoutIds.get(el), r.x, r.y, r.width, r.height].join(",");
-    }).join(";");
+      return [layoutIds.get(el), r.x, r.y, r.width, r.height];
+    });
   }
   const viewportState = () => ({ width: innerWidth, height: innerHeight, dpr: devicePixelRatio,
     x: scrollX, y: scrollY, scale: visualViewport?.scale || 1,

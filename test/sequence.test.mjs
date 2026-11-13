@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { runSequence, validateSequence, TOOL_DEFS } from '../src/background/tools.js';
+import { runSequence, validateSequence, TOOL_DEFS, isMiroUrl } from '../src/background/tools.js';
+for (const url of ['https://miro.com/app/board/x', 'https://www.miro.com/', 'https://MIRO.COM./']) assert(isMiroUrl(url));
+for (const url of ['https://miro.com.attacker.test/', 'https://notmiro.com/', 'https://fixture.test/?host=miro.com', 'invalid']) assert(!isMiroUrl(url));
 const actions = [0, 1, 2].map(ref => ({ name: 'click_element', args: { ref } }));
 assert.equal(validateSequence({ actions }), null);
 for (const bad of [[], Array(21).fill(actions[0]), [{ name: 'browser_sequence', args: {} }], [{ name: 'run_javascript', args: { code: '1' } }], [{ name: 'type_text', args: { ref: 1 } }], [{ name: 'click_element', args: { ref: '1' } }]]) {

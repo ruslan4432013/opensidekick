@@ -3,6 +3,12 @@
 All notable changes to OpenSidekick are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.12.3] — 2026-11-13
+
+- On Miro, the agent uses screenshot-based pointer input instead of page JavaScript. `run_javascript` is hidden and rejected on Miro, including after navigation, so synthetic clicks cannot bypass coordinate scaling and stale-screenshot checks.
+- Unrelated animations no longer invalidate a screenshot. Coordinate actions still reject changed geometry at the intended click or drag endpoint.
+- Miro instructions explicitly use original screenshot pixels without applying DPR or board zoom a second time, and require observing the result.
+
 ## [0.12.2] — 2026-11-13
 
 - `pointer_action` no longer requests confirmation in any autonomy or site-access mode, including sequence steps. Explicit site blocks and screenshot/target validation remain enforced. This exception does not grant permission to other tools.
