@@ -18,6 +18,7 @@ import { SENSITIVE_HOST_PATTERNS } from "../common/constants.js";
 export const MUTATING_TOOLS = new Set([
   "click_element",
   "type_text",
+  "fill_form",
   "select_option",
   "navigate",
   "open_tab",

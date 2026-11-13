@@ -1,3 +1,4 @@
+import { recordCall } from "./activity.js";
 // The agent loop: repeatedly call the model, execute any tool calls it makes,
 // and feed results back until the model stops calling tools, calls `finish`,
 // or is aborted. Runs have no step cap: when the conversation grows past the
@@ -18,7 +19,9 @@ import { ensureSidekickGroup } from "./tab-group.js";
 const SYSTEM_PROMPT = `You are OpenSidekick, a browser assistant that can read and act on the web page the user is looking at, on their behalf, using tools.
 
 How to work:
+- New user messages during a task steer the current task. Apply corrections to the next actions while preserving the goal unless the user changes it.
 - To understand a page, call read_page. It returns interactive elements each with a numeric "ref". Act on elements by their ref.
+- Prefer fill_form for multiple known text fields. Use include_page=true on actions to get fresh refs in the same result; reuse that page instead of calling read_page again.
 - Prefer read_page before acting. After an action changes the page, read it again — refs are only valid for the most recent read_page.
 - Use get_page_text to read or summarize article content.
 - Use find to locate text on the page. Use form_input to fill a field you can identify by name, id or placeholder when you don't have a ref. press_keys without a ref sends the keys to the focused element.
@@ -72,7 +75,7 @@ function identityNotes(config, provider) {
 }
 
 // Tools that can send text out of the page (form fields, scripts).
-const SEND_TOOLS = new Set(["type_text", "press_keys", "run_javascript"]);
+const SEND_TOOLS = new Set(["fill_form", "type_text", "press_keys", "run_javascript"]);
 
 // The URL a tab shows or is loading ("" when the tab is gone).
 async function tabUrl(tabId) {
@@ -86,6 +89,7 @@ async function tabUrl(tabId) {
 
 export async function runAgent(deps) {
   const { conversation, config, provider, initialTabId, signal, emit, requestPermission, requestPlanApproval, saveSitePermission } = deps;
+  const steering = deps.steering || [];
   const identity = identityNotes(config, provider);
 
   // Offer optional tools only when the user has enabled them: vision (needs a
@@ -226,7 +230,7 @@ export async function runAgent(deps) {
     ([...conversation].reverse().find((m) => m.role === "user" && typeof m.content === "string" && !m.internal) || {})
       .content || "",
   ).slice(0, 500);
-  const userRequest = looksLikeSecret(latestRequest) ? "" : latestRequest;
+  let userRequest = looksLikeSecret(latestRequest) ? "" : latestRequest;
   const actionChecks = new Map(); // tool|page|label -> classifyAction result, per run
 
   // Loop detector (pure JS, no model): signatures of calls that actually ran.
@@ -237,6 +241,7 @@ export async function runAgent(deps) {
   let narrationNudged = false;
   const declinedServers = new Set(); // MCP servers the user refused, for this run
   const ctx = {
+    signal,
     getTabId: async () => focusedTabId,
     setTabId: (id) => {
       focusedTabId = id;
@@ -249,7 +254,11 @@ export async function runAgent(deps) {
   };
 
   // Plan-approval mode: propose a plan and wait for approval before acting.
-  if (config.settings.autonomy === "plan" && requestPlanApproval) {
+  while (config.settings.autonomy === "plan" && requestPlanApproval) {
+    for (const text of steering.splice(0)) {
+      conversation.push({ role: "user", content: text });
+      userRequest = looksLikeSecret(text) ? "" : text;
+    }
     emit({ kind: "planning" });
     let plan = null;
     try {
@@ -261,8 +270,10 @@ export async function runAgent(deps) {
       emit({ kind: "aborted" });
       return;
     }
+    if (steering.length) continue;
     if (plan && plan.needsActions) {
       const approved = await requestPlanApproval(plan);
+      if (approved === "steer") continue;
       if (!approved) {
         emit({ kind: "plan_declined" });
         emit({ kind: "done" });
@@ -282,10 +293,15 @@ export async function runAgent(deps) {
           ". Ask before using any other site.",
       });
     }
+    break;
   }
 
   try {
   while (true) {
+    for (const text of steering.splice(0)) {
+      conversation.push({ role: "user", content: text });
+      userRequest = looksLikeSecret(text) ? "" : text;
+    }
     if (signal.aborted) {
       emit({ kind: "aborted" });
       return;
@@ -356,6 +372,15 @@ export async function runAgent(deps) {
       return;
     }
 
+    if (signal.aborted) {
+      emit({ kind: "aborted" });
+      return;
+    }
+    // A correction received during inference supersedes the proposed tool calls.
+    if (steering.length) {
+      emit({ kind: "assistant_end", content: result.content || "" });
+      continue;
+    }
     // Record the assistant turn (text + any tool calls).
     conversation.push({
       role: "assistant",
@@ -395,6 +420,10 @@ export async function runAgent(deps) {
         return;
       }
 
+      if (steering.length) {
+        pushToolResult(conversation, call, { ok: false, error: "Superseded by a new user message. Reconsider on the next turn." });
+        continue;
+      }
       if (call.name === "finish") {
         const summary = (call.args && call.args.summary) || "Done.";
         conversation.push({
@@ -468,6 +497,10 @@ export async function runAgent(deps) {
                   serverId: d.server.id,
                   sensitive: false,
                 });
+            if (choice === "steer") {
+              pushToolResult(conversation, call, { ok: false, error: "Superseded by user steering." });
+              continue;
+            }
             if (choice === "decline") {
               declinedServers.add(d.server.id);
               pushToolResult(conversation, call, {
@@ -482,6 +515,10 @@ export async function runAgent(deps) {
           }
         }
 
+        if (steering.length) {
+          pushToolResult(conversation, call, { ok: false, error: "Superseded by user steering." });
+          continue;
+        }
         executed.push(signature);
         let toolResult;
         try {
@@ -577,7 +614,7 @@ export async function runAgent(deps) {
 
         // (D) High-consequence actions (buy / pay / delete / …) always confirm,
         // regardless of site or autonomy mode.
-        let forceSensitive = false;
+        let forceSensitive = call.name === "fill_form" && (Array.isArray(call.args?.fields) ? call.args.fields : []).some(f => looksLikeSecret(f.value));
         if (!gateReads && (call.name === "click_element" || call.name === "double_click")) {
           if (isSensitiveActionText(lastElements.get(call.args?.ref))) forceSensitive = true;
         }
@@ -631,6 +668,7 @@ export async function runAgent(deps) {
           // that matters. The fragment is dropped — it never changes the action.
           const key = call.name + "|" + url.split("#")[0] + "|" + label;
           if (!actionChecks.has(key)) {
+            const checkStarted = Date.now();
             actionChecks.set(
               key,
               await classifyAction(
@@ -639,6 +677,7 @@ export async function runAgent(deps) {
                 { breaker, emit, signal },
               ),
             );
+            recordCall({ ts: Date.now(), kind: "check:action", ms: Date.now() - checkStarted, ok: actionChecks.get(key) !== null });
           }
           const r = actionChecks.get(key);
           if (r && r.probability >= dthreshold) {
@@ -676,6 +715,10 @@ export async function runAgent(deps) {
             newSite: !!verdict.newSite,
             why: verdict.why || "",
           });
+          if (choice === "steer") {
+            pushToolResult(conversation, call, { ok: false, error: "Superseded by user steering." });
+            continue;
+          }
           if (choice === "decline") {
             pushToolResult(conversation, call, {
               ok: false,
@@ -709,6 +752,10 @@ export async function runAgent(deps) {
         }
       }
 
+      if (steering.length) {
+        pushToolResult(conversation, call, { ok: false, error: "Superseded by a new user message before execution." });
+        continue;
+      }
       // (C) Show the on-page activity indicator on the tab we're about to touch
       // (hidden momentarily for screenshots so it isn't captured).
       const overlayLabel = "OpenSidekick: " + call.name.replace(/_/g, " ");
@@ -717,12 +764,15 @@ export async function runAgent(deps) {
       await setOverlay(focusedTabId, hideForShot ? "hide" : "show", overlayLabel);
 
       executed.push(signature);
+      const toolStarted = Date.now();
       let toolResult;
       try {
         toolResult = await executeTool(call.name, runArgs, ctx);
       } catch (e) {
         toolResult = { ok: false, error: String(e.message || e) };
       }
+      recordCall({ ts: Date.now(), kind: "browser", tool: call.name,
+        ms: Date.now() - toolStarted, ok: toolResult.ok !== false });
       if (hideForShot) await setOverlay(focusedTabId, "show", overlayLabel);
 
       // A tool that returns an image (screenshot) can't carry it in an OpenAI
@@ -744,16 +794,32 @@ export async function runAgent(deps) {
       }
       if (toolResult && isSensitive(toolResult.url || "")) sawSensitive = true;
 
+      let embeddedPage = null;
+      if ((runArgs.include_page || call.name === "fill_form") && !signal.aborted) {
+        const readUrl = await tabUrl(focusedTabId);
+        const readVerdict = evaluate("read_page", readUrl, config, sessionGrants);
+        if (readVerdict.decision === "allow") {
+          const readStarted = Date.now();
+          embeddedPage = await executeTool("read_page", { settle: true, expectedOrigin: originOf(readUrl) }, ctx);
+          recordCall({ ts: Date.now(), kind: "browser", tool: "read_page",
+            ms: Date.now() - readStarted, ok: embeddedPage.ok !== false });
+        } else {
+          toolResult.page_note = "Call read_page to request access to the resulting page.";
+        }
+      }
+      const actionResult = toolResult;
+      if (embeddedPage?.ok) toolResult = embeddedPage;
+
       // (B) Track the observed origin and flag suspected prompt injection so the
       // model treats page instructions as data, not commands.
-      if (toolResult && toolResult.ok !== false && (call.name === "read_page" || call.name === "get_page_text")) {
+      if (toolResult && toolResult.ok !== false && (embeddedPage?.ok || call.name === "read_page" || call.name === "get_page_text")) {
         observedOrigin = originOf(toolResult.url) || observedOrigin;
-        if (call.name === "read_page") {
+        if (embeddedPage?.ok || call.name === "read_page") {
           needsRead = false; // refs and labels now come from this page
           lastElements.clear();
           for (const el of toolResult.elements || []) lastElements.set(el.ref, el.name || "");
         }
-        const scanText = call.name === "read_page" ? readableText(toolResult) : toolResult.text || "";
+        const scanText = embeddedPage?.ok || call.name === "read_page" ? readableText(toolResult) : toolResult.text || "";
         if (detectInjection(scanText).suspected) {
           toolResult.suspected_injection = true;
           toolResult.injection_note = INJECTION_NOTE;
@@ -765,7 +831,9 @@ export async function runAgent(deps) {
           // and never run on a sensitive origin (banking, payments, crypto):
           // those pages are the ones carrying balances and account numbers, and
           // the rest of the extension already treats them as a category apart.
+          const checkStarted = Date.now();
           const jev = await classifyInjection(dsrc, scanText, { breaker, emit, signal });
+          recordCall({ ts: Date.now(), kind: "check:injection", ms: Date.now() - checkStarted, ok: jev !== null });
           if (jev && jev.probability >= dthreshold) {
             toolResult.suspected_injection = true;
             toolResult.injection_note = INJECTION_NOTE;
@@ -781,6 +849,10 @@ export async function runAgent(deps) {
         }
       }
 
+      if (embeddedPage) {
+        toolResult = { ...actionResult, url: embeddedPage.url || actionResult.url, page: embeddedPage };
+        if (isSensitive(embeddedPage.url || "")) sawSensitive = true;
+      }
       pushToolResult(conversation, call, toolResult);
       emit({
         kind: "tool_end",
@@ -848,6 +920,8 @@ function actionLabel(call, lastElements) {
       return String(args.url || "");
     case "press_keys":
       return Array.isArray(args.keys) ? args.keys.join("+") : String(args.keys || "");
+    case "fill_form":
+      return (Array.isArray(args.fields) ? args.fields : []).map(f => lastElements.get(f.ref) || "").join(", ");
     case "drag_element":
       return String(lastElements.get(args.from_ref) || "");
     default:
@@ -884,6 +958,8 @@ export function summarizeResult(name, r) {
       return `clicked ${r.clicked || ""}`;
     case "type_text":
       return `typed "${(r.typed || "").slice(0, 40)}"${r.submitted ? " and submitted" : ""}`;
+    case "fill_form":
+      return `filled ${(r.completed || []).length} fields`;
     case "select_option":
       return `selected ${r.selected || ""}`;
     case "hover_element":

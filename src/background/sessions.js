@@ -17,6 +17,11 @@ export const SCREENSHOT_PLACEHOLDER = "(a screenshot was attached here; it is no
 // list_tabs and read_network are left out on purpose: they mention other URLs
 // without the agent having looked at those pages.
 const SENSITIVE_SCAN_TOOLS = new Set([
+  "click_element",
+  "type_text",
+  "select_option",
+  "form_input",
+  "fill_form",
   "read_page",
   "get_page_text",
   "run_javascript",

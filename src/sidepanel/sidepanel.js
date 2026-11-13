@@ -511,7 +511,7 @@ async function setSiteRule(origin, rule) {
 async function onSubmit(e) {
   e.preventDefault();
   const text = els.input.value.trim();
-  if (!text || running) return;
+  if (!text) return;
   if (!configured) {
     // First-run gate: no model yet — send them to Settings instead of failing.
     els.empty.hidden = false;
@@ -582,14 +582,16 @@ function handleEvent(ev) {
       }
       break;
     case "user_echo":
+      if (ev.steered) els.messages.querySelectorAll(".perm-card").forEach(card => card.remove());
+      setRunning(true);
       els.empty.hidden = true;
       addUserMessage(ev.text);
       break;
     case "assistant_start":
-      startAssistant();
+      if (running) startAssistant();
       break;
     case "assistant_delta":
-      appendAssistant(ev.text);
+      if (running) appendAssistant(ev.text);
       break;
     case "assistant_end":
       endAssistant(ev.content);
@@ -642,11 +644,13 @@ function setRunning(v) {
   const changed = running !== v;
   running = v;
   if (changed) refreshHistoryMenu(true);
-  els.send.disabled = v;
+  els.send.disabled = false;
   els.stop.hidden = !v;
-  els.send.hidden = v;
+  els.send.hidden = false;
   if (v) setStatus("Working…");
   else {
+    endAssistant();
+    els.messages.querySelectorAll(".thinking").forEach(node => node.closest(".msg")?.remove());
     clearStatus();
     flushHeldSwitch();
   }

@@ -3,6 +3,17 @@
 All notable changes to OpenSidekick are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.10.0] — 2026-11-13
+
+- Send a message during a task to steer the next actions, without switching modes.
+- Stop and error states clear unfinished Thinking indicators and preserve streamed text.
+
+## [0.9.0] — 2026-11-13
+
+- Browser actions can return the updated page, reducing extra model requests.
+- Fill multiple text fields in one call with progress reported on failure.
+- Record browser execution durations alongside local model activity.
+
 ## [Unreleased]
 
 ## [0.8.0] — 2026-10-31

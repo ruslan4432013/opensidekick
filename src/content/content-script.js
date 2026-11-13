@@ -10,6 +10,7 @@
   if (window.__opensidekick_cs_loaded) return;
   window.__opensidekick_cs_loaded = true;
 
+  const documentToken = Array.from(crypto.getRandomValues(new Uint32Array(4))).join("-");
   const MAX_ELEMENTS = 200;
   const MAX_TEXT = 8000;
 
@@ -20,6 +21,23 @@
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     try {
       switch (msg.type) {
+        case "cs_validate_fields": {
+          const valid = msg.fields.every(f => {
+            const el = refMap.get(f.ref);
+            return el && document.contains(el) && !el.disabled && !el.readOnly &&
+              (el.tagName === "TEXTAREA" || el.tagName === "INPUT" &&
+               ["text", "email", "tel", "url", "search", "password", "number"].includes(el.type));
+          });
+          sendResponse({ ok: valid, token: documentToken, url: location.href,
+            error: valid ? undefined : "Every ref must identify an enabled text field on the current page." });
+          return true;
+        }
+        case "cs_document_token":
+          sendResponse({ ok: true, token: documentToken, url: location.href });
+          return true;
+        case "cs_settled_page":
+          settledPage(msg.expectedOrigin).then(sendResponse);
+          return true;
         case "cs_ping":
           sendResponse({ ok: true });
           return true;
@@ -56,9 +74,39 @@
   // Reading
   // -------------------------------------------------------------------------
 
+  function settledPage(expectedOrigin) {
+    return new Promise(resolve => {
+      let quietTimer;
+      const finish = () => {
+        observer.disconnect();
+        clearTimeout(quietTimer);
+        clearTimeout(deadline);
+        resolve(expectedOrigin && location.origin !== expectedOrigin
+          ? { ok: false, error: "Page origin changed; request read_page access again." }
+          : readPage());
+      };
+      const observer = new MutationObserver(records => {
+        const pageChanged = records.some(record => {
+          const element = record.target.nodeType === Node.ELEMENT_NODE
+            ? record.target : record.target.parentElement;
+          if (element?.closest("#opensidekick-overlay")) return false;
+          if (record.type !== "childList") return true;
+          return [...record.addedNodes, ...record.removedNodes]
+            .some(node => node.id !== "opensidekick-overlay");
+        });
+        if (pageChanged) {
+          clearTimeout(quietTimer);
+          quietTimer = setTimeout(finish, 100);
+        }
+      });
+      observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+      const deadline = setTimeout(finish, 1000);
+      quietTimer = setTimeout(finish, 100);
+    });
+  }
+
   function readPage() {
     refMap = new Map();
-    refCounter = 0;
 
     const elements = [];
     const selector = [
@@ -239,6 +287,9 @@
   // -------------------------------------------------------------------------
 
   function act(msg) {
+    if (msg.documentToken && (msg.documentToken !== documentToken || msg.documentUrl !== location.href)) {
+      return { ok: false, error: "Document changed while filling the form." };
+    }
     if (msg.action === "scroll") return scroll(msg);
     if (msg.action === "fill") return fillField(msg.selector, msg.value);
     // press_keys with no ref targets the focused element (or the page), as
@@ -415,6 +466,7 @@
 
   function type(el, text, submit) {
     const tag = el.tagName.toLowerCase();
+    if (el.disabled || el.readOnly) return { ok: false, error: "Field is disabled or read-only." };
     try {
       el.focus({ preventScroll: true });
     } catch {

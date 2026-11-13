@@ -332,7 +332,65 @@ export const TOOL_DEFS = [
 
 // ctx: { getTabId, setTabId }  — the agent owns the "focused" tab id and can
 // change it (open_tab / switch_tab), so tools read/write it through ctx.
+
+const PAGE_ACTIONS = new Set(["click_element", "type_text", "select_option", "form_input", "navigate"]);
+for (const tool of TOOL_DEFS) {
+  if (PAGE_ACTIONS.has(tool.name)) {
+    tool.parameters.properties.include_page = {
+      type: "boolean",
+      description: "Return the fresh page with this action; prefer true to avoid a separate read_page call.",
+    };
+  }
+}
+TOOL_DEFS.push({
+  name: "fill_form",
+  description: "Fill known text fields sequentially in one call, without submitting. Returns completed refs and the fresh page. Stops on the first failure.",
+  parameters: {
+    type: "object",
+    properties: {
+      fields: {
+        type: "array", minItems: 1, maxItems: 50,
+        items: {
+          type: "object",
+          properties: { ref: { type: "integer" }, value: { type: "string" } },
+          required: ["ref", "value"], additionalProperties: false,
+        },
+      },
+    },
+    required: ["fields"], additionalProperties: false,
+  },
+});
+
 export async function executeTool(name, args, ctx) {
+  if (ctx.signal?.aborted) return { ok: false, error: "Cancelled" };
+  if (name === "read_page" && args.settle) {
+    return csSend(await ctx.getTabId(), { type: "cs_settled_page", expectedOrigin: args.expectedOrigin });
+  }
+  if (name !== "fill_form") return executeAction(name, args, ctx);
+  const fields = args.fields;
+  if (!Array.isArray(fields) || !fields.length || fields.length > 50 ||
+      fields.some(f => !Number.isInteger(f.ref) || typeof f.value !== "string")) {
+    return { ok: false, error: "Expected 1–50 fields with integer ref and string value.", completed: [] };
+  }
+  const tabId = await ctx.getTabId();
+  const initial = await csSend(tabId, { type: "cs_validate_fields", fields });
+  if (!initial?.ok || !initial.token) return { ok: false, error: "Cannot identify the current document.", completed: [] };
+  const completed = [];
+  for (const field of fields) {
+    if (ctx.signal?.aborted) return { ok: false, error: "Cancelled", completed };
+    const result = await csSend(tabId, {
+      type: MSG.CS_ACT, action: "type", ref: field.ref, text: field.value,
+      documentToken: initial.token, documentUrl: initial.url,
+    });
+    if (!result?.ok) return { ...result, ok: false, completed };
+    completed.push(field.ref);
+    // Let framework updates run before resolving the next element.
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  return { ok: true, completed };
+}
+
+async function executeAction(name, args, ctx) {
   switch (name) {
     case "read_page":
       return await csSend(await ctx.getTabId(), { type: MSG.CS_READ_PAGE });
@@ -539,7 +597,7 @@ async function navigate(ctx, target) {
   } else {
     await chrome.tabs.goForward(tabId).catch(() => {});
   }
-  await waitForLoad(tabId);
+  await waitForLoad(tabId, 15000, ctx.signal);
   const tab = await chrome.tabs.get(tabId);
   return { ok: true, url: tab.url, title: tab.title };
 }
@@ -549,7 +607,7 @@ async function openTab(ctx, url) {
   if (!full) return { ok: false, error: "OpenSidekick opens tabs to http(s) addresses only." };
   const tab = await chrome.tabs.create({ url: full, active: true });
   ctx.setTabId(tab.id);
-  await waitForLoad(tab.id);
+  await waitForLoad(tab.id, 15000, ctx.signal);
   const updated = await chrome.tabs.get(tab.id);
   return { ok: true, tab_id: tab.id, url: updated.url, title: updated.title };
 }
@@ -756,7 +814,7 @@ async function waitSeconds(seconds) {
   return { ok: true, waited_seconds: ms / 1000 };
 }
 
-function waitForLoad(tabId, timeoutMs = 15000) {
+function waitForLoad(tabId, timeoutMs = 15000, signal) {
   return new Promise((resolve) => {
     let done = false;
     const finish = () => {
@@ -764,17 +822,20 @@ function waitForLoad(tabId, timeoutMs = 15000) {
       done = true;
       chrome.tabs.onUpdated.removeListener(listener);
       clearTimeout(timer);
-      // Small settle delay so client-side rendering can start.
-      setTimeout(resolve, 400);
+      signal?.removeEventListener("abort", finish);
+      // The optional page read handles DOM settling.
+      resolve();
     };
     const listener = (id, info) => {
       if (id === tabId && info.status === "complete") finish();
     };
     chrome.tabs.onUpdated.addListener(listener);
     const timer = setTimeout(finish, timeoutMs);
+    signal?.addEventListener("abort", finish, { once: true });
+    if (signal?.aborted) finish();
     // In case it's already complete.
     chrome.tabs.get(tabId).then((t) => {
       if (t && t.status === "complete") finish();
-    });
+    }).catch(finish);
   });
 }

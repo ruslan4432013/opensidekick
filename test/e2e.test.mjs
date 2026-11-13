@@ -145,6 +145,7 @@ function decide(messages) {
 
   // A reply that streams its first words, then stalls, so the side panel can
   // be poked mid-run (the model-switch note must wait for the run to end).
+  if (/steer to blue/.test(lastUser)) return { kind: "text", text: "Steering received: blue." };
   if (/hold your reply/.test(lastUser)) return { kind: "text", text: "Holding on... done holding.", stallMs: 2500 };
 
   if (/format the answer as markdown/.test(lastUser)) return { kind: "text", text: MD_ANSWER };
@@ -1656,7 +1657,7 @@ async function main() {
     // the restored conversation). ---
     const panelIdle = async (pg, prevAnswers) => {
       for (let i = 0; i < 120; i++) {
-        const idle = await pg.$eval("#send-btn", (el) => !el.hidden).catch(() => false);
+        const idle = await pg.$eval("#stop-btn", (el) => el.hidden).catch(() => false);
         const answers = await pg.$$eval(".msg.assistant", (n) => n.length).catch(() => 0);
         if (idle && answers > prevAnswers) return answers;
         await new Promise((r) => setTimeout(r, 200));
@@ -2226,6 +2227,28 @@ async function main() {
         empty: !document.getElementById("empty-state").hidden,
       }));
       check(afterNew.msgs === 0 && afterNew.notes === 0 && afterNew.empty, `model-switch: the note's New chat clears the chat (got ${JSON.stringify(afterNew)})`);
+      await mPanel.fill("#input", "Hold your reply for a moment.");
+      await mPanel.click("#send-btn");
+      await mPanel.waitForFunction(() => [...document.querySelectorAll(".msg.assistant")].some(n => n.textContent.includes("Holding")));
+      check(await mPanel.isVisible("#send-btn"), "steer: Send stays visible during execution");
+      await mPanel.fill("#input", "Steer to blue.");
+      await mPanel.click("#send-btn");
+      await mPanel.waitForFunction(() => [...document.querySelectorAll(".msg.assistant")].some(n => n.textContent.includes("Steering received: blue.")));
+      await mPanel.waitForFunction(() => document.getElementById("stop-btn").hidden);
+      check(await mPanel.locator(".msg.user").last().textContent() === "Steer to blue.", "steer: accepted correction appears in chat");
+      check(await mPanel.locator(".thinking").count() === 0, "steer: completed task leaves no Thinking indicator");
+
+      // Reproduce the orphaned pre-token bubble after worker termination.
+      await optPage.evaluate(async type => {
+        await chrome.runtime.sendMessage({ type, kind: "user_echo", text: "Recovery fixture" });
+        await chrome.runtime.sendMessage({ type, kind: "assistant_start" });
+      }, MSG.AGENT_EVENT);
+      await mPanel.waitForSelector(".thinking");
+      await mPanel.click("#stop-btn");
+      await mPanel.waitForFunction(() => !document.querySelector(".thinking"));
+      await optPage.evaluate(type => chrome.runtime.sendMessage({ type, kind: "assistant_delta", text: "late" }), MSG.AGENT_EVENT);
+      check(await mPanel.locator(".thinking").count() === 0, "stop: idle clears Thinking and late deltas do not recreate it");
+
 
       // A switch made while the panel is closed is noted when it reopens on the
       // restored chat.
@@ -2295,7 +2318,7 @@ async function main() {
     await testPage.bringToFront(); // the run needs a real page as the active tab
     await histPanel2.keyboard.press("Enter");
     for (let i = 0; i < 100; i++) {
-      const idle = await histPanel2.$eval("#send-btn", (el) => !el.hidden).catch(() => false);
+      const idle = await histPanel2.$eval("#stop-btn", (el) => el.hidden).catch(() => false);
       const bubbles = await histPanel2.$$eval(".msg.user", (n) => n.length).catch(() => 0);
       if (idle && bubbles > 0) break;
       await new Promise((r) => setTimeout(r, 200));
@@ -2530,7 +2553,7 @@ async function main() {
       m.scrollTop = 0;
       m.dispatchEvent(new Event("scroll"));
       window.__copyClicked = btn;
-      const running = document.getElementById("send-btn").hidden;
+      const running = !document.getElementById("stop-btn").hidden;
       await new Promise((r) => setTimeout(r, 120));
       return { label: btn.textContent, aria: btn.getAttribute("aria-label"), scrollable: m.scrollHeight - m.clientHeight > 200, running };
     }).catch(() => null);

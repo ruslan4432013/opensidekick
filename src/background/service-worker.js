@@ -669,7 +669,20 @@ async function clearSessions() {
 }
 
 async function handleRunTask(msg) {
-  if (currentRun) return { ok: false, error: "A task is already running." };
+  if (currentRun) {
+    if (currentRun.chat && !currentRun.controller.signal.aborted && !msg.newChat && currentRun.steering) {
+      const text = String(msg.task || "").trim();
+      if (!text) return { ok: false, error: "Empty message." };
+      currentRun.steering.push(text);
+      for (const [, resolve] of pendingPermissions) resolve("steer");
+      pendingPermissions.clear();
+      for (const [, resolve] of pendingPlans) resolve("steer");
+      pendingPlans.clear();
+      emit({ kind: "user_echo", text, steered: true });
+      return { ok: true, steered: true };
+    }
+    return { ok: false, error: "A task is already running." };
+  }
 
   const { config, provider } = await getActiveProvider();
   if (!provider) {
@@ -694,7 +707,8 @@ async function handleRunTask(msg) {
   const saveMeta = { model: config.activeModel, provider: provider.name };
 
   const controller = new AbortController();
-  currentRun = { controller, chat: true };
+  const steering = [];
+  currentRun = { controller, chat: true, steering };
 
   const initialTabId = await getActiveContentTabId();
   if (initialTabId == null) {
@@ -713,6 +727,7 @@ async function handleRunTask(msg) {
     config,
     provider,
     initialTabId,
+    steering,
     signal: controller.signal,
     emit,
     requestPermission,
@@ -721,8 +736,11 @@ async function handleRunTask(msg) {
   })
     .catch((e) => emit({ kind: "error", error: String(e.message || e) }))
     .finally(async () => {
+      if (currentRun?.controller === controller) currentRun.steering = null;
       // Detach the debugger (removes the "debugging this browser" banner).
       await detachAll().catch(() => {});
+      // Preserve accepted steering even if Stop arrives before the next model turn.
+      for (const text of steering.splice(0)) runConversation.push({ role: "user", content: text });
       // Before idle, so whoever waits for idle sees the saved chat.
       await saveRun(runSession, runConversation, saveMeta).catch(() => {});
       currentRun = null;
