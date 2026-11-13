@@ -98,7 +98,12 @@ export async function sendKeyEvents(tabId, keys) {
     }
     if (main) {
       const info = keyInfo(main);
-      await keyEvent(tabId, "keyDown", { modifiers: mask, key: info.key, code: info.code, windowsVirtualKeyCode: info.vk });
+      // CDP key events alone do not invoke the native Select All binding on
+      // macOS. Send the editing command with the shortcut so rich editors
+      // select their contents before Input.insertText replaces the selection.
+      const commands = main === "a" && (mask === 4 || mask === 2) ? ["selectAll"] : undefined;
+      await keyEvent(tabId, "keyDown", { modifiers: mask, key: info.key, code: info.code,
+        windowsVirtualKeyCode: info.vk, ...(commands ? { commands } : {}) });
       // A printable key with no modifiers also needs a char event to type.
       if (info.text && mask === 0) {
         await keyEvent(tabId, "char", { text: info.text, key: info.key });

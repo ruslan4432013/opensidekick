@@ -3,6 +3,10 @@
 All notable changes to OpenSidekick are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.12.4] — 2026-11-14
+
+- Select All shortcuts (`Meta+A` / `Cmd+A` / `Control+A`) now send the browser's native editing command with trusted input. Text insertion can replace the full focused field or rich-editor contents instead of inserting at the caret.
+
 ## [0.12.3] — 2026-11-13
 
 - On Miro, the agent uses screenshot-based pointer input instead of page JavaScript. `run_javascript` is hidden and rejected on Miro, including after navigation, so synthetic clicks cannot bypass coordinate scaling and stale-screenshot checks.

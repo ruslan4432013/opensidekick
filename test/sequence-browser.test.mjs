@@ -256,6 +256,27 @@ try {
       assert.equal(denied.ok, false);
       console.log(`PASS Miro routing and actual trusted double click: DPR=${dpr}, zoom=${zoom}, image=${imageScale}, expected=(${150*zoom},${90*zoom}), actual=(${actual.x},${actual.y}); correct cell edited`);
     }
+    // Start in the middle of existing text, as in the real Miro failure.
+    // Verify selection itself and exact replacement, including multiline editors.
+    for (const markup of ['<input id="editor" value="before old after">', '<textarea id="editor">before\nold\nafter</textarea>', '<div id="editor" contenteditable="true"><p>before</p><p>old</p><p>after</p></div>']) {
+      for (const keys of [['Meta', 'a'], ['Cmd', 'A'], ['Command', 'a'], ['Control', 'a']]) {
+        await page.evaluate(markup => {
+          document.body.innerHTML = markup + '<input id="untouched" value="keep me">';
+          const editor = document.querySelector('#editor'); editor.focus();
+          if (editor.setSelectionRange) editor.setSelectionRange(7, 7);
+          else { const selection = getSelection(); selection.collapse(editor.firstChild.firstChild, 2); }
+        }, markup);
+        const selected = await run('press_keys', { keys });
+        assert(selected.ok, JSON.stringify(selected));
+        assert.equal(await page.$eval('#editor', el => el.isContentEditable
+          ? getSelection().toString().replace(/\s/g, '') === el.textContent.replace(/\s/g, '')
+          : el.selectionStart === 0 && el.selectionEnd === el.value.length), true, keys.join('+'));
+        assert((await run('insert_text', { text: 'REPLACED' })).ok);
+        assert.equal(await page.$eval('#editor', el => el.isContentEditable ? el.textContent : el.value), 'REPLACED');
+        assert.equal(await page.inputValue('#untouched'), 'keep me');
+      }
+    }
+    console.log('PASS Meta/Cmd/Command/Control+A selects and replaces complete input, textarea and rich editor contents');
     await context.close();
   }
 } finally { await browser.close(); }
