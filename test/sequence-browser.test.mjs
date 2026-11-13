@@ -63,11 +63,11 @@ try {
     assert.equal((await run('pointer_action', { ...actions[0].args, screenshot_id: beforeMove.screenshot_id })).ok, false);
     assert.equal((await executeTool('pointer_action', actions[0].args, { ...ctx, visionAllowed: false })).ok, false);
 
-    // Auto must not open a permission card for canvas targets or sensitive
+    // Pointer input must not open a permission card for canvas targets or sensitive
     // labels, whether the action is standalone or a sequence step.
     for (const [mode, label, sequence] of [
       ['auto', '', false], ['auto', 'Buy now', false], ['auto', '', true],
-      ['auto', 'Buy now', true], ['ask', '', false], ['ask', 'Buy now', true],
+      ['auto', 'Buy now', true], ['ask', '', false], ['ask', 'Buy now', true], ['plan', '', false], ['plan', 'Buy now', true],
     ]) {
       await page.evaluate(label => {
         const target = document.createElement('div');
@@ -95,11 +95,11 @@ try {
         provider: { name: 'Fixture', baseUrl: 'http://fixture.invalid/v1', type: 'openai' },
         emit() {}, requestPermission: async () => { permissionCalls++; return 'decline'; },
       });
-      assert.equal(permissionCalls, mode === 'auto' ? 0 : 1, `${mode}: ${label}, sequence=${sequence}`);
-      assert.equal(await page.evaluate(() => window.pointerClicks), mode === 'auto' ? 1 : 0);
+      assert.equal(permissionCalls, 0, `${mode}: ${label}, sequence=${sequence}`);
+      assert.equal(await page.evaluate(() => window.pointerClicks), 1);
       await page.locator('#pointer-fixture').evaluate(el => el.remove());
     }
-    console.log('PASS Auto pointer without prompts, sensitive/unlabelled targets, sequence parity, Ask still prompts');
+    console.log('PASS pointer without prompts in Auto/Ask/Plan, sensitive/unlabelled targets and sequence parity');
 
     // Exercise the real agent loop and its permission gate with a deterministic
     // local model response, including navigation while approval is pending.

@@ -3,6 +3,10 @@
 All notable changes to OpenSidekick are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.12.2] — 2026-11-13
+
+- `pointer_action` no longer requests confirmation in any autonomy or site-access mode, including sequence steps. Explicit site blocks and screenshot/target validation remain enforced. This exception does not grant permission to other tools.
+
 ## [0.12.1] — 2026-11-13
 
 - In Auto mode, coordinate actions (`pointer_action`) run without per-action permission prompts, including inside action sequences. Blocked sites and site-access allowlists still apply; other modes keep their confirmations.

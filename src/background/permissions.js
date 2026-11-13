@@ -178,14 +178,9 @@ export function evaluate(toolName, url, config, sessionGrants) {
     return { decision: "block", reason: `You have blocked OpenSidekick on ${origin}.` };
   }
 
-  // Auto pointer input is explicitly hands-off, including unlabelled canvas
-  // targets. Site-access rules still apply before any action can run.
-  if (toolName === "pointer_action" && config.settings.autonomy === "auto") {
-    if (allowlistMode && stored !== "allow" && !sessionGrants.has(origin)) {
-      return { decision: "prompt", sensitive: false, newSite: true };
-    }
-    return { decision: "allow", autoGranted: true };
-  }
+  // Pointer actions never open permission cards. Do not grant the origin:
+  // other tools must still follow their own site-access and autonomy rules.
+  if (toolName === "pointer_action") return { decision: "allow" };
 
   const sensitive = isSensitive(url);
   if (sensitive && (isMutating || isFocus)) {

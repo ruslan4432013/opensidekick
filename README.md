@@ -74,8 +74,8 @@ genuinely agentic, and usable with any LLM — including fully local models.**
   focused editor; with Vision enabled too, screenshot coordinates support
   clicks, double-clicks, scrolling and dragging. Coordinates use image pixels,
   with tab/document and viewport checks. After scrolling, dragging or layout
-  changes, take a new screenshot. Auto mode runs pointer actions without per-action confirmation; other modes
-  still confirm unlabelled targets. Blocked sites and site-access allowlists apply.
+  changes, take a new screenshot. `pointer_action` never asks for confirmation in any mode, including site-access
+  allowlist mode. Explicit site blocks still apply; other tools retain their rules.
   Browser pinch zoom must be reset before capturing actionable screenshots.
 - **Optional developer tools** — read the page's console messages and network
   requests to debug ("why is this page erroring?"), and a run-JavaScript escape
@@ -99,8 +99,8 @@ genuinely agentic, and usable with any LLM — including fully local models.**
   an action if the page changed origin** since it was last read (defends against
   redirects / injected navigation); **forced confirmation on purchase/delete-type
   clicks** even in auto mode; and **prompt-injection flagging** of page content.
-  Auto-mode `pointer_action` is exempt from these per-action confirmations;
-  site-access restrictions still apply. Other tools confirm on sensitive sites
+  `pointer_action` is exempt from permission prompts in every mode;
+  explicit site blocks still apply. Other tools confirm on sensitive sites
   (banking, payments, crypto).
 - **Smart checks (optional, beta)** — a second opinion from TypeSafe's Jev
   decision model where the built-in patterns are thin: confirm risky actions
@@ -108,7 +108,7 @@ genuinely agentic, and usable with any LLM — including fully local models.**
   aimed at the agent, and let scheduled tasks notify you only when the result
   actually changed. Needs an OpenRouter or TypeSafe key, is off until you switch
   it on, and can only ever add a confirmation — the built-in checks stay in
-  place either way. Auto-mode pointer actions skip the risky-action check.
+  place either way. Pointer actions skip the risky-action check.
 - **Saved prompts** — store reusable prompts and insert them by typing `/` in the
   chat (with an autocomplete menu). The composer also has shell-style **prompt
   history**: press ↑/↓ to recall, edit, and re-run previous prompts.
@@ -288,7 +288,7 @@ check sends.
   page content as untrusted and never follow instructions embedded in pages.
   This is a mitigation, not a guarantee — review actions on important sites.
 - **Sensitive sites** (banks, payment processors, crypto exchanges) require
-  per-action confirmation except for `pointer_action` in Auto mode.
+  per-action confirmation except for `pointer_action` in every mode.
 - The agent will not attempt to bypass logins or CAPTCHAs — it pauses and asks
   you to handle them.
 

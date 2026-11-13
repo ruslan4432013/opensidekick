@@ -673,11 +673,10 @@ export async function runAgent(deps) {
             }
           }
 
-          // Auto pointer input skips per-action confirmations. All other tools
+          // Pointer input skips per-action confirmations. All other tools
           // keep high-consequence confirmation regardless of autonomy mode.
-          const autoPointer = call.name === "pointer_action" && config.settings.autonomy === "auto";
+          const pointerAction = call.name === "pointer_action";
           let forceSensitive =
-            call.name === "pointer_action" && !autoPointer && (!call.args.target_label || isSensitiveActionText(call.args.target_label)) ||
             call.name === "insert_text" && looksLikeSecret(call.args?.text) ||
             call.name === "fill_form" && (Array.isArray(call.args?.fields) ? call.args.fields : []).some(f => looksLikeSecret(f.value));
           if (!gateReads && (call.name === "click_element" || call.name === "double_click")) {
@@ -721,7 +720,7 @@ export async function runAgent(deps) {
           if (
             !gateReads &&
             !forceSensitive &&
-            !autoPointer &&
+            !pointerAction &&
             verdict.decision === "allow" &&
             dsrc &&
             featureEnabled(config, "action") &&
