@@ -63,6 +63,44 @@ try {
     assert.equal((await run('pointer_action', { ...actions[0].args, screenshot_id: beforeMove.screenshot_id })).ok, false);
     assert.equal((await executeTool('pointer_action', actions[0].args, { ...ctx, visionAllowed: false })).ok, false);
 
+    // Auto must not open a permission card for canvas targets or sensitive
+    // labels, whether the action is standalone or a sequence step.
+    for (const [mode, label, sequence] of [
+      ['auto', '', false], ['auto', 'Buy now', false], ['auto', '', true],
+      ['auto', 'Buy now', true], ['ask', '', false], ['ask', 'Buy now', true],
+    ]) {
+      await page.evaluate(label => {
+        const target = document.createElement('div');
+        target.id = 'pointer-fixture'; target.textContent = label;
+        target.style.cssText = 'position:fixed;left:450px;top:400px;width:150px;height:50px;background:gray';
+        window.pointerClicks = 0; target.onclick = () => window.pointerClicks++;
+        document.body.append(target);
+      }, label);
+      const history = [{ role: 'user', content: 'Click the test target' }];
+      let modelCalls = 0, permissionCalls = 0;
+      globalThis.fetch = async () => {
+        let call;
+        if (modelCalls === 0) call = { name: 'take_screenshot', args: {} };
+        else if (modelCalls === 1) {
+          const shot = JSON.parse(history.find(m => m.role === 'tool' && m.name === 'take_screenshot').content);
+          assert(shot.screenshot_id, JSON.stringify(shot));
+          const step = { name: 'pointer_action', args: { screenshot_id: shot.screenshot_id, action: 'click', x: 480*dpr, y: 420*dpr } };
+          call = sequence ? { name: 'browser_sequence', args: { actions: [step] } } : step;
+        } else { assert.equal(modelCalls, 2); call = { name: 'finish', args: { summary: 'Done' } }; }
+        modelCalls++;
+        return new Response('data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'pointer'+modelCalls, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.args) } }] } }] }) + '\n\ndata: [DONE]\n\n');
+      };
+      await runAgent({ conversation: history, initialTabId: dpr, signal: new AbortController().signal,
+        config: { activeModel: 'fixture', settings: { autonomy: mode, siteAccess: 'all', enableCdp: true, enableVision: true }, sitePermissions: {} },
+        provider: { name: 'Fixture', baseUrl: 'http://fixture.invalid/v1', type: 'openai' },
+        emit() {}, requestPermission: async () => { permissionCalls++; return 'decline'; },
+      });
+      assert.equal(permissionCalls, mode === 'auto' ? 0 : 1, `${mode}: ${label}, sequence=${sequence}`);
+      assert.equal(await page.evaluate(() => window.pointerClicks), mode === 'auto' ? 1 : 0);
+      await page.locator('#pointer-fixture').evaluate(el => el.remove());
+    }
+    console.log('PASS Auto pointer without prompts, sensitive/unlabelled targets, sequence parity, Ask still prompts');
+
     // Exercise the real agent loop and its permission gate with a deterministic
     // local model response, including navigation while approval is pending.
     await page.$eval('#cell', el => { el.readOnly = false; el.style.left = '80px'; el.value = ''; });

@@ -111,5 +111,16 @@ ok(applyBatch({ decision: "allow" }).decision === "allow", "batch: an allow pass
 ok(applyBatch(evaluate("read_page", URL_A, cfg("allowlist", "ask"), none)).decision === "allow",
   "batch: an allowlist new-site prompt (a trust-this-site card) is also converted");
 
+for (const url of [URL_A, bank]) {
+  ok(evaluate("pointer_action", url, cfg("all", "auto"), none).decision === "allow",
+    "auto pointer: no action prompt on " + url);
+  ok(evaluate("pointer_action", url, cfg("all", "ask"), none).decision === "prompt",
+    "ask pointer: still prompts on " + url);
+  ok(evaluate("pointer_action", url, cfg("allowlist", "auto"), none).newSite === true,
+    "auto pointer: still requires site access on " + url);
+  ok(evaluate("pointer_action", url, cfg("all", "auto", { [originOf(url)]: "block" }), none).decision === "block",
+    "auto pointer: blocked site stays blocked on " + url);
+}
+
 console.log(fail ? "\nSOME PERMISSION TESTS FAILED" : "\nALL PERMISSION TESTS PASSED");
 process.exit(fail);

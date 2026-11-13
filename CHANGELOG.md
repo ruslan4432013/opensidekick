@@ -3,6 +3,10 @@
 All notable changes to OpenSidekick are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.12.1] — 2026-11-13
+
+- In Auto mode, coordinate actions (`pointer_action`) run without per-action permission prompts, including inside action sequences. Blocked sites and site-access allowlists still apply; other modes keep their confirmations.
+
 ## [0.12.0] — 2026-11-13
 
 - Run up to 20 known browser actions in one sequence, with a fresh page returned at the end and live step/completion progress in the panel. Ordinary text forms still use `fill_form`.
