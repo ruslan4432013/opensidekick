@@ -17,6 +17,24 @@
   // ref id -> element. Rebuilt on every read_page.
   let refMap = new Map();
   let refCounter = 0;
+  let geometry = 0;
+  addEventListener("scroll", () => { geometry++; }, true);
+  addEventListener("resize", () => { geometry++; });
+  const layoutIds = new WeakMap();
+  let nextLayoutId = 0;
+  // Text edits inside a fixed box do not invalidate a capture; moved/replaced
+  // boxes do. Include generic containers because canvas controls need not be semantic.
+  function layoutState() {
+    return Array.from(document.querySelectorAll("body *")).filter(el =>
+      !el.closest("#opensidekick-overlay") && isVisible(el)).map(el => {
+      if (!layoutIds.has(el)) layoutIds.set(el, ++nextLayoutId);
+      const r = el.getBoundingClientRect();
+      return [layoutIds.get(el), r.x, r.y, r.width, r.height].join(",");
+    }).join(";");
+  }
+  const viewportState = () => ({ width: innerWidth, height: innerHeight, dpr: devicePixelRatio,
+    x: scrollX, y: scrollY, scale: visualViewport?.scale || 1,
+    offsetX: visualViewport?.offsetLeft || 0, offsetY: visualViewport?.offsetTop || 0 });
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     try {
@@ -32,8 +50,24 @@
             error: valid ? undefined : "Every ref must identify an enabled text field on the current page." });
           return true;
         }
+        case "cs_inspect_focus": {
+          const el = document.activeElement;
+          const editable = el && !el.disabled && !el.readOnly &&
+            (el.isContentEditable || el.tagName === "TEXTAREA" || el.tagName === "INPUT" &&
+              ["text", "email", "tel", "url", "search", "password", "number"].includes(el.type));
+          if (el && !layoutIds.has(el)) layoutIds.set(el, ++nextLayoutId);
+          sendResponse({ ok: !!editable, target: layoutIds.get(el), label: editable ? accessibleName(el) : "",
+            error: editable ? undefined : "Focus an editable field before inserting text." });
+          return true;
+        }
+        case "cs_inspect_target": {
+          const el = msg.ref != null ? refMap.get(msg.ref) : document.elementFromPoint(msg.x, msg.y);
+          const valid = el && document.contains(el) && isVisible(el) && !el.disabled;
+          sendResponse({ ok: !!valid, label: valid ? accessibleName(el.closest("button,a,input,textarea,select,[role=button]") || el).slice(0, 200) : "", error: valid ? undefined : "Target disappeared or is not interactable." });
+          return true;
+        }
         case "cs_document_token":
-          sendResponse({ ok: true, token: documentToken, url: location.href });
+          sendResponse({ ok: true, token: documentToken, url: location.href, viewport: viewportState(), geometry, layout: msg.includeGeometry ? layoutState() : undefined });
           return true;
         case "cs_settled_page":
           settledPage(msg.expectedOrigin).then(sendResponse);

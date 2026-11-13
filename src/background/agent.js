@@ -6,7 +6,7 @@ import { recordCall } from "./activity.js";
 // a task can run as long as it needs to.
 
 import { callModel } from "./providers.js";
-import { TOOL_DEFS, executeTool, setOverlay } from "./tools.js";
+import { TOOL_DEFS, executeTool, setOverlay, documentState, validateSequence, runSequence, inspectTarget, sameDocument } from "./tools.js";
 import { evaluate, stricter, applyBatch, MUTATING_TOOLS, PAGE_READ_TOOLS, FOCUS_TOOLS, originOf, hostOf, isSensitive, normalizeTarget } from "./permissions.js";
 import { detectInjection, isSensitiveActionText, looksLikeSecret, INJECTION_NOTE } from "./safety.js";
 import { parsePlan, planToText, hostFromDomain } from "./plan.js";
@@ -21,6 +21,7 @@ const SYSTEM_PROMPT = `You are OpenSidekick, a browser assistant that can read a
 How to work:
 - New user messages during a task steer the current task. Apply corrections to the next actions while preserving the goal unless the user changes it.
 - To understand a page, call read_page. It returns interactive elements each with a numeric "ref". Act on elements by their ref.
+- Use browser_sequence for up to 20 already-understood actions without intermediate model turns. Stop at unknown branches and observe again. Coordinate actions require a fresh screenshot_id; use insert_text for the focused canvas editor. Never guess coordinates or reuse them after geometry changes. On partial failure, do not replay completed steps; observe and continue only the remaining work.
 - Prefer fill_form for multiple known text fields. Use include_page=true on actions to get fresh refs in the same result; reuse that page instead of calling read_page again.
 - Prefer read_page before acting. After an action changes the page, read it again — refs are only valid for the most recent read_page.
 - Use get_page_text to read or summarize article content.
@@ -75,7 +76,7 @@ function identityNotes(config, provider) {
 }
 
 // Tools that can send text out of the page (form fields, scripts).
-const SEND_TOOLS = new Set(["fill_form", "type_text", "press_keys", "run_javascript"]);
+const SEND_TOOLS = new Set(["fill_form", "type_text", "press_keys", "run_javascript", "insert_text"]);
 
 // The URL a tab shows or is loading ("" when the tab is gone).
 async function tabUrl(tabId) {
@@ -251,6 +252,7 @@ export async function runAgent(deps) {
     // press_keys uses it to send real key events, which canvas editors
     // like Google Docs require.
     cdpAllowed: !!config.settings.enableCdp,
+    visionAllowed: !!config.settings.enableVision,
   };
 
   // Plan-approval mode: propose a plan and wait for approval before acting.
@@ -414,452 +416,535 @@ export async function runAgent(deps) {
 
     // Execute each requested tool, appending a tool result for every call.
     const pendingImages = [];
-    for (const call of result.toolCalls) {
-      if (signal.aborted) {
-        emit({ kind: "aborted" });
-        return;
-      }
-
-      if (steering.length) {
-        pushToolResult(conversation, call, { ok: false, error: "Superseded by a new user message. Reconsider on the next turn." });
-        continue;
-      }
-      if (call.name === "finish") {
-        const summary = (call.args && call.args.summary) || "Done.";
-        conversation.push({
-          role: "tool",
-          toolCallId: call.id,
-          name: call.name,
-          content: JSON.stringify({ ok: true }),
-        });
-        emit({ kind: "finish", summary });
-        emit({ kind: "done" });
-        return;
-      }
-
-      emit({ kind: "tool_start", name: call.name, args: call.args });
-
-      // Only tools offered this run may run: a model can name a tool it was not
-      // given (a disabled run_javascript, the debugger readers, screenshots).
-      if (!tools.some((t) => t.name === call.name)) {
-        pushToolResult(conversation, call, { ok: false, error: `The tool ${call.name} is not available in this task.` });
-        emit({ kind: "tool_end", name: call.name, ok: false, summary: "blocked: tool not offered" });
-        continue;
-      }
-
-      // (F) Loop detector: a model that retries the identical call forever burns
-      // the step budget and the user's patience. Three identical calls IN A ROW
-      // is enough — refuse the fourth and tell it to vary. Consecutive, not
-      // "3 of the last 8": read, act, read, act, read, act is the loop this
-      // agent is told to run, and a window-based rule refuses its fourth read
-      // while claiming nothing had changed between them.
-      const signature = JSON.stringify([call.name, call.args || {}]);
-      const recent = executed.slice(-3);
-      if (!LOOP_EXEMPT.has(call.name) && recent.length === 3 && recent.every((s) => s === signature)) {
-        pushToolResult(conversation, call, {
-          ok: false,
-          error:
-            "You've already done exactly this 3 times in a row with the same result. Don't repeat it — try a different element, a different approach, or call finish with what you have.",
-        });
-        emit({ kind: "tool_end", name: call.name, ok: false, summary: "skipped: repeated action" });
-        if (!loopWarned) {
-          loopWarned = true;
-          emit({ kind: "warning", text: "The agent started repeating itself; nudged it to try something else." });
-        }
-        continue;
-      }
-
-      // External MCP tool — dispatch to the server, not the page.
-      if (mcpDispatch.has(call.name)) {
-        const d = mcpDispatch.get(call.name);
-
-        // Gate it. MCP tools used to dispatch straight to the server, which
-        // skipped autonomy entirely — an MCP tool can send mail or move files,
-        // so "ask" has to mean ask here too. The grant is per server (there is
-        // no page origin involved) and lives for this run only: nothing about an
-        // MCP server belongs in the per-site permission list.
-        if (config.settings.autonomy !== "auto") {
-          const grant = "mcp:" + d.server.id;
-          // A refusal sticks for the run. Otherwise a model that keeps calling
-          // the same tool raises a fresh card on every step until the step cap,
-          // and prompt fatigue is what makes people click Allow.
-          const alreadyDeclined = declinedServers.has(d.server.id);
-          // Batch mode skips the card — but a prior refusal still wins.
-          if (alreadyDeclined || (!batchMode && !sessionGrants.has(grant))) {
-            const choice = alreadyDeclined
-              ? "decline"
-              : await requestPermission({
-                  origin: "MCP server: " + d.server.name,
-                  toolName: call.name,
-                  args: call.args,
-                  mcp: true,
-                  serverName: d.server.name,
-                  serverId: d.server.id,
-                  sensitive: false,
-                });
-            if (choice === "steer") {
-              pushToolResult(conversation, call, { ok: false, error: "Superseded by user steering." });
-              continue;
-            }
-            if (choice === "decline") {
-              declinedServers.add(d.server.id);
-              pushToolResult(conversation, call, {
-                ok: false,
-                error: "The user declined to let you use the MCP tool " + call.name + ".",
-              });
-              emit({ kind: "tool_end", name: call.name, ok: false, summary: "Declined by user." });
-              continue;
-            }
-            if (choice !== "once") sessionGrants.add(grant);
-            if (choice === "run") engageBatch();
-          }
+    let halt = false;
+    async function performCall(call, capture = false, baseline = null) {
+      let captured;
+      let started = false;
+      let ended = false;
+      const toolEmit = event => {
+        if (event.kind === "tool_start" && event.name === call.name) started = true;
+        if (event.kind === "tool_end" && event.name === call.name) ended = true;
+        emit(event);
+      };
+      let initialTarget;
+      const reportResult = (history, current, output) => {
+        captured = output;
+        if (!capture) pushToolResult(history, current, output);
+      };
+      await (async () => {
+        if (signal.aborted) {
+          toolEmit({ kind: "aborted" });
+          halt = true;
+          reportResult(conversation, call, { ok: false, error: "Cancelled" });
+          return;
         }
 
         if (steering.length) {
-          pushToolResult(conversation, call, { ok: false, error: "Superseded by user steering." });
-          continue;
+          reportResult(conversation, call, { ok: false, error: "Superseded by a new user message. Reconsider on the next turn." });
+          return;
+        }
+        if (call.name === "finish") {
+          const summary = (call.args && call.args.summary) || "Done.";
+          conversation.push({
+            role: "tool",
+            toolCallId: call.id,
+            name: call.name,
+            content: JSON.stringify({ ok: true }),
+          });
+          toolEmit({ kind: "finish", summary });
+          toolEmit({ kind: "done" });
+          halt = true;
+          return;
+        }
+
+        toolEmit({ kind: "tool_start", name: call.name, args: call.args });
+
+        // Only tools offered this run may run: a model can name a tool it was not
+        // given (a disabled run_javascript, the debugger readers, screenshots).
+        if (!tools.some((t) => t.name === call.name)) {
+          reportResult(conversation, call, { ok: false, error: `The tool ${call.name} is not available in this task.` });
+          toolEmit({ kind: "tool_end", name: call.name, ok: false, summary: "blocked: tool not offered" });
+          return;
+        }
+
+        if (call.name === "browser_sequence") {
+          const invalid = validateSequence(call.args, tools);
+          let output;
+          if (invalid) output = { ok: false, error: invalid, results: [], completed: 0, stopped_at: 0 };
+          else output = await runSequence(call.args, {
+            state: () => documentState(ctx),
+            interrupted: () => signal.aborted || steering.length > 0,
+            perform: (step, index, baseline) => performCall({ id: call.id + ":" + index, name: step.name, args: { ...step.args, include_page: false } }, true, baseline),
+            progress: (index, completed) => toolEmit({ kind: "sequence_progress", index, completed, total: call.args.actions.length }),
+          });
+          if (!signal.aborted) {
+            const page = await performCall({ id: call.id + ":page", name: "read_page", args: { settle: true } }, true);
+            if (page?.ok) output.page = page;
+            else output.page_note = page?.error || "Fresh observation unavailable.";
+          }
+          reportResult(conversation, call, output);
+          toolEmit({ kind: "tool_end", name: call.name, ok: output.ok, summary: `${output.completed} actions completed` });
+          return;
+        }
+
+        // (F) Loop detector: a model that retries the identical call forever burns
+        // the step budget and the user's patience. Three identical calls IN A ROW
+        // is enough — refuse the fourth and tell it to vary. Consecutive, not
+        // "3 of the last 8": read, act, read, act, read, act is the loop this
+        // agent is told to run, and a window-based rule refuses its fourth read
+        // while claiming nothing had changed between them.
+        const signature = JSON.stringify([call.name, call.args || {}]);
+        const recent = executed.slice(-3);
+        if (!LOOP_EXEMPT.has(call.name) && recent.length === 3 && recent.every((s) => s === signature)) {
+          reportResult(conversation, call, {
+            ok: false,
+            error:
+              "You've already done exactly this 3 times in a row with the same result. Don't repeat it — try a different element, a different approach, or call finish with what you have.",
+          });
+          toolEmit({ kind: "tool_end", name: call.name, ok: false, summary: "skipped: repeated action" });
+          if (!loopWarned) {
+            loopWarned = true;
+            toolEmit({ kind: "warning", text: "The agent started repeating itself; nudged it to try something else." });
+          }
+          return;
+        }
+
+        // External MCP tool — dispatch to the server, not the page.
+        if (mcpDispatch.has(call.name)) {
+          const d = mcpDispatch.get(call.name);
+
+          // Gate it. MCP tools used to dispatch straight to the server, which
+          // skipped autonomy entirely — an MCP tool can send mail or move files,
+          // so "ask" has to mean ask here too. The grant is per server (there is
+          // no page origin involved) and lives for this run only: nothing about an
+          // MCP server belongs in the per-site permission list.
+          if (config.settings.autonomy !== "auto") {
+            const grant = "mcp:" + d.server.id;
+            // A refusal sticks for the run. Otherwise a model that keeps calling
+            // the same tool raises a fresh card on every step until the step cap,
+            // and prompt fatigue is what makes people click Allow.
+            const alreadyDeclined = declinedServers.has(d.server.id);
+            // Batch mode skips the card — but a prior refusal still wins.
+            if (alreadyDeclined || (!batchMode && !sessionGrants.has(grant))) {
+              const choice = alreadyDeclined
+                ? "decline"
+                : await requestPermission({
+                    origin: "MCP server: " + d.server.name,
+                    toolName: call.name,
+                    args: call.args,
+                    mcp: true,
+                    serverName: d.server.name,
+                    serverId: d.server.id,
+                    sensitive: false,
+                  });
+              if (choice === "steer") {
+                reportResult(conversation, call, { ok: false, error: "Superseded by user steering." });
+                return;
+              }
+              if (choice === "decline") {
+                declinedServers.add(d.server.id);
+                reportResult(conversation, call, {
+                  ok: false,
+                  error: "The user declined to let you use the MCP tool " + call.name + ".",
+                });
+                toolEmit({ kind: "tool_end", name: call.name, ok: false, summary: "Declined by user." });
+                return;
+              }
+              if (choice !== "once") sessionGrants.add(grant);
+              if (choice === "run") engageBatch();
+            }
+          }
+
+          if (steering.length) {
+            reportResult(conversation, call, { ok: false, error: "Superseded by user steering." });
+            return;
+          }
+          executed.push(signature);
+          let toolResult;
+          try {
+            const r = await callTool(d.server, d.session, d.remoteName, call.args || {});
+            toolResult = { ok: r.isError !== true, result: flattenMcpContent(r.content) };
+          } catch (e) {
+            toolResult = { ok: false, error: "MCP tool failed: " + (e.message || e) };
+          }
+          reportResult(conversation, call, toolResult);
+          toolEmit({
+            kind: "tool_end",
+            name: call.name,
+            ok: toolResult.ok !== false,
+            summary: toolResult.ok ? String(toolResult.result || "").slice(0, 60) : toolResult.error,
+          });
+          return;
+        }
+
+        // Permission gate for mutating actions — and, in allowlist site-access
+        // mode, for page reads too (the agent shouldn't even read an untrusted
+        // site; the resulting prompt doubles as the "trust this site" toggle).
+        const gateReads = config.settings.siteAccess === "allowlist" && PAGE_READ_TOOLS.has(call.name);
+        const isFocus = FOCUS_TOOLS.has(call.name);
+        // navigate (to a URL) and open_tab are judged by the site they load.
+        const loadsTarget =
+          call.name === "open_tab" || (call.name === "navigate" && !["back", "forward"].includes(call.args?.url));
+        // Tools that act on the page in the agent's tab (not on another tab or URL;
+        // back/forward move through history and need no fresh read).
+        const actsOnPage = MUTATING_TOOLS.has(call.name) && call.name !== "navigate" && !loadsTarget;
+        const gateReadsAll = PAGE_READ_TOOLS.has(call.name); // a block rule applies to reads in every mode
+        let runArgs = call.args || {};
+        if (MUTATING_TOOLS.has(call.name) || gateReadsAll || isFocus) {
+          let url = "";
+          let pageTitle = "";
+          let altUrl = ""; // switch_tab: a tab's pendingUrl, judged too
+          if (loadsTarget) {
+            url = normalizeTarget(call.args?.url);
+            if (!url) {
+              reportResult(conversation, call, { ok: false, error: "Only http(s) web addresses can be opened." });
+              toolEmit({ kind: "tool_end", name: call.name, ok: false, summary: "blocked: not an http(s) address" });
+              return;
+            }
+            runArgs = { ...runArgs, url }; // the tool loads exactly the URL that was gated
+          } else if (isFocus) {
+            let tab = null;
+            try {
+              tab = await chrome.tabs.get(Number(call.args?.tab_id));
+            } catch {
+              /* refused below: no tab, no switch */
+            }
+            if (!tab) {
+              reportResult(conversation, call, { ok: false, error: `No tab with id ${call.args?.tab_id}.` });
+              toolEmit({ kind: "tool_end", name: call.name, ok: false, summary: "no such tab" });
+              return;
+            }
+            url = tab.url || tab.pendingUrl || "";
+            altUrl = tab.pendingUrl && tab.pendingUrl !== url ? tab.pendingUrl : "";
+            pageTitle = tab.title || "";
+            runArgs = { ...runArgs, tab_id: tab.id };
+          } else {
+            try {
+              const tab = await chrome.tabs.get(focusedTabId);
+              url = tab.url || "";
+              pageTitle = tab.title || "";
+            } catch {
+              /* ignore */
+            }
+          }
+          const currentOrigin = originOf(url);
+
+          // (A0) After the tab or page changed under the agent, read before acting.
+          if (actsOnPage && needsRead) {
+            reportResult(conversation, call, {
+              ok: false,
+              error: "You are on a different page now. Call read_page before acting on it.",
+            });
+            toolEmit({ kind: "tool_end", name: call.name, ok: false, summary: "blocked: read the new page first" });
+            toolEmit({ kind: "warning", text: `Blocked ${call.name}: the agent moved to another page and hasn't read it yet.` });
+            return;
+          }
+
+          // (A) Domain re-check: refuse to act if the page changed origin since it
+          // was last read (defends against redirects / injected navigation).
+          if (actsOnPage && observedOrigin && currentOrigin && currentOrigin !== observedOrigin) {
+            reportResult(conversation, call, {
+              ok: false,
+              error: `The page changed to ${currentOrigin} since you last read it (was ${observedOrigin}). Call read_page again before acting on this page.`,
+            });
+            toolEmit({ kind: "tool_end", name: call.name, ok: false, summary: "blocked: page changed since last read" });
+            toolEmit({ kind: "warning", text: `Blocked ${call.name}: the page changed origin (${observedOrigin} → ${currentOrigin}) since it was last read.` });
+            return;
+          }
+
+          if (evaluate(call.name, url, config, sessionGrants).decision !== "block" && ["click_element", "double_click", "pointer_action", "insert_text"].includes(call.name)) {
+            const target = await inspectTarget(ctx, call.name, call.args || {});
+            if (!target.ok) {
+              reportResult(conversation, call, target);
+              toolEmit({ kind: "tool_end", name: call.name, ok: false, summary: target.error });
+              return;
+            }
+            initialTarget = target;
+            call = { ...call, args: { ...call.args, target_label: target.label } };
+            runArgs = call.args;
+            if (call.args.ref != null) lastElements.set(call.args.ref, target.label);
+          }
+
+          if (actsOnPage && !baseline && evaluate(call.name, url, config, sessionGrants).decision !== "block") {
+            baseline = await documentState(ctx);
+            if (!baseline?.ok || baseline.pending) {
+              reportResult(conversation, call, { ok: false, error: "Cannot identify a stable document." });
+              return;
+            }
+          }
+
+          // (D) High-consequence actions (buy / pay / delete / …) always confirm,
+          // regardless of site or autonomy mode.
+          let forceSensitive =
+            call.name === "pointer_action" && (!call.args.target_label || isSensitiveActionText(call.args.target_label)) ||
+            call.name === "insert_text" && looksLikeSecret(call.args?.text) ||
+            call.name === "fill_form" && (Array.isArray(call.args?.fields) ? call.args.fields : []).some(f => looksLikeSecret(f.value));
+          if (!gateReads && (call.name === "click_element" || call.name === "double_click")) {
+            if (isSensitiveActionText(lastElements.get(call.args?.ref))) forceSensitive = true;
+          }
+
+          let verdict = evaluate(call.name, url, config, sessionGrants);
+          let promptUrl = url; // the site the card names
+          if (altUrl) {
+            const alt = evaluate(call.name, altUrl, config, sessionGrants);
+            if (stricter(verdict, alt) === alt) {
+              verdict = alt;
+              promptUrl = altUrl;
+            }
+          }
+          // After a sensitive page, typing and scripts on any site can carry what
+          // was read there (a form post, a fetch), so they ask per action too.
+          if (sawSensitive && SEND_TOOLS.has(call.name) && verdict.decision !== "block") {
+            verdict = { decision: "prompt", sensitive: true, why: "The agent has been on a sensitive site in this chat (New chat resets this)" };
+          }
+          // Leaving a sensitive page (or any page after one): the destination URL
+          // could carry what was read there, so every navigation asks.
+          if (loadsTarget && verdict.decision !== "block" && (sawSensitive || isSensitive(await tabUrl(focusedTabId)))) {
+            verdict = { decision: "prompt", sensitive: true, why: "The agent has been on a sensitive site in this chat (New chat resets this)" };
+          }
+          if (forceSensitive && verdict.decision !== "block") {
+            verdict = { decision: "prompt", sensitive: true };
+          } else if (verdict.decision === "prompt" && !verdict.sensitive) {
+            // In plan mode, act freely on sites the user approved in the plan —
+            // never on a sensitive site, which asks per action. The host is the
+            // parsed one, so "chase.com?.approved.com" is chase.com.
+            const currentHost = hostOf(url);
+            const preApproved = currentHost && [...approvedHosts].some((h) => currentHost === h || currentHost.endsWith("." + h));
+            if (preApproved) verdict = { decision: "allow" };
+          }
+
+          // (E) Smart check: the regex above reads one English label, so it misses
+          // "Continue" on a checkout page or "Jetzt kaufen". Ask Jev only when the
+          // action would otherwise go through unasked — it can escalate to a
+          // confirmation, never relax one.
+          if (
+            !gateReads &&
+            !forceSensitive &&
+            verdict.decision === "allow" &&
+            dsrc &&
+            featureEnabled(config, "action") &&
+            MUTATING_TOOLS.has(call.name)
+          ) {
+            const label = actionLabel(call, lastElements);
+            // Keyed by the page, not just the origin: "Continue" on
+            // example.com/newsletter and on example.com/checkout are not the same
+            // question, and caching the first answer for the second is the miss
+            // that matters. The fragment is dropped — it never changes the action.
+            const key = call.name + "|" + url.split("#")[0] + "|" + label;
+            if (!actionChecks.has(key)) {
+              const checkStarted = Date.now();
+              actionChecks.set(
+                key,
+                await classifyAction(
+                  dsrc,
+                  { tool: call.name, url, title: pageTitle, label, userRequest },
+                  { breaker, emit, signal },
+                ),
+              );
+              recordCall({ ts: Date.now(), kind: "check:action", ms: Date.now() - checkStarted, ok: actionChecks.get(key) !== null });
+            }
+            const r = actionChecks.get(key);
+            if (r && r.probability >= dthreshold) {
+              verdict = {
+                decision: "prompt",
+                sensitive: true,
+                smart: true,
+                why:
+                  "Smart check rated this " +
+                  (r.severity ? r.severity + "-consequence" : "risky") +
+                  " (" + Math.round(r.probability * 100) + "% likely)",
+              };
+            }
+          }
+
+          // Batch mode ("Allow rest of task" on an earlier card): ordinary
+          // prompts become allows for the remainder of this run — new sites
+          // included. Sensitive verdicts (banking, high-consequence clicks,
+          // smart-check escalations, post-sensitive-site sends) and block rules
+          // are untouched: applyBatch only ever converts a plain "prompt".
+          if (batchMode) verdict = applyBatch(verdict);
+
+          if (verdict.decision === "block") {
+            reportResult(conversation, call, { ok: false, error: verdict.reason });
+            toolEmit({ kind: "tool_end", name: call.name, ok: false, summary: verdict.reason });
+            return;
+          }
+          if (verdict.decision === "prompt") {
+            const origin = originOf(promptUrl) || promptUrl;
+            const choice = await requestPermission({
+              origin,
+              toolName: call.name,
+              args: runArgs,
+              sensitive: !!verdict.sensitive,
+              newSite: !!verdict.newSite,
+              why: verdict.why || "",
+            });
+            if (choice === "steer") {
+              reportResult(conversation, call, { ok: false, error: "Superseded by user steering." });
+              return;
+            }
+            if (choice === "decline") {
+              reportResult(conversation, call, {
+                ok: false,
+                error: "The user declined this action.",
+              });
+              toolEmit({ kind: "tool_end", name: call.name, ok: false, summary: "Declined by user." });
+              if (!capture) toolEmit({ kind: "done" });
+              return;
+            }
+            // The page may have changed while the card was open: act only on the
+            // site the user was asked about.
+            const checkTab = isFocus ? runArgs.tab_id : focusedTabId;
+            const nowOrigin = originOf(await tabUrl(checkTab));
+            if ((actsOnPage || gateReads || isFocus) && nowOrigin !== originOf(url) && nowOrigin !== originOf(altUrl || url)) {
+              reportResult(conversation, call, {
+                ok: false,
+                error: "The page changed while waiting for approval. Call read_page again.",
+              });
+              toolEmit({ kind: "tool_end", name: call.name, ok: false, summary: "blocked: page changed during approval" });
+              needsRead = true;
+              return;
+            }
+            // Sensitive actions always re-prompt — never persist or session-grant.
+            if (!verdict.sensitive) {
+              if (choice === "run") engageBatch();
+              if (choice === "always") await saveSitePermission(origin, "allow");
+              else sessionGrants.add(origin); // "once" and "run" both cover this site for the run
+            }
+          } else if (verdict.autoGranted) {
+            sessionGrants.add(currentOrigin);
+          }
+        }
+
+        if (signal.aborted || steering.length || baseline && !sameDocument(await documentState(ctx), baseline)) {
+          reportResult(conversation, call, { ok: false, error: "Interrupted or document changed before execution." });
+          return;
+        }
+        // (C) Show the on-page activity indicator on the tab we're about to touch
+        // (hidden momentarily for screenshots so it isn't captured).
+        const overlayLabel = "OpenSidekick: " + call.name.replace(/_/g, " ");
+        const hideForShot = call.name === "take_screenshot";
+        touchedTabs.add(focusedTabId);
+        await setOverlay(focusedTabId, hideForShot ? "hide" : "show", overlayLabel);
+
+        if (baseline && !sameDocument(await documentState(ctx), baseline)) {
+          reportResult(conversation, call, { ok: false, error: "Document changed before action." });
+          return;
+        }
+        if (initialTarget) {
+          const currentTarget = await inspectTarget(ctx, call.name, runArgs);
+          if (!currentTarget.ok || currentTarget.label !== initialTarget.label || currentTarget.target !== initialTarget.target) {
+            reportResult(conversation, call, { ok: false, error: "Target changed while awaiting permission; observe it again." });
+            return;
+          }
         }
         executed.push(signature);
+        const toolStarted = Date.now();
         let toolResult;
         try {
-          const r = await callTool(d.server, d.session, d.remoteName, call.args || {});
-          toolResult = { ok: r.isError !== true, result: flattenMcpContent(r.content) };
+          toolResult = await executeTool(call.name, runArgs, ctx);
         } catch (e) {
-          toolResult = { ok: false, error: "MCP tool failed: " + (e.message || e) };
+          toolResult = { ok: false, error: String(e.message || e) };
         }
-        pushToolResult(conversation, call, toolResult);
-        emit({
+        recordCall({ ts: Date.now(), kind: "browser", tool: call.name,
+          ms: Date.now() - toolStarted, ok: toolResult.ok !== false });
+        if (hideForShot) await setOverlay(focusedTabId, "show", overlayLabel);
+
+        // A tool that returns an image (screenshot) can't carry it in an OpenAI
+        // tool result, so hold the image and attach it as a follow-up user
+        // message once every tool result for this turn is recorded.
+        if (toolResult && toolResult.image) {
+          pendingImages.push(toolResult.image);
+          toolResult = { ...toolResult, image: undefined, note: toolResult.note || "Image attached below." };
+        }
+
+        // The agent is on another page now (or may be): forget the last read, and
+        // judge where it actually landed (a redirect, back/forward, a pending load).
+        if (call.name === "navigate" || call.name === "open_tab" || call.name === "switch_tab") {
+          needsRead = true;
+          observedOrigin = null;
+          lastElements.clear();
+          const landed = await tabUrl(focusedTabId);
+          if (isSensitive(landed) || isSensitive(toolResult?.url || "")) sawSensitive = true;
+        }
+        if (toolResult && isSensitive(toolResult.url || "")) sawSensitive = true;
+
+        let embeddedPage = null;
+        if ((runArgs.include_page || call.name === "fill_form") && !signal.aborted) {
+          const readUrl = await tabUrl(focusedTabId);
+          const readVerdict = evaluate("read_page", readUrl, config, sessionGrants);
+          if (readVerdict.decision === "allow") {
+            const readStarted = Date.now();
+            embeddedPage = await executeTool("read_page", { settle: true, expectedOrigin: originOf(readUrl) }, ctx);
+            recordCall({ ts: Date.now(), kind: "browser", tool: "read_page",
+              ms: Date.now() - readStarted, ok: embeddedPage.ok !== false });
+          } else {
+            toolResult.page_note = "Call read_page to request access to the resulting page.";
+          }
+        }
+        const actionResult = toolResult;
+        if (embeddedPage?.ok) toolResult = embeddedPage;
+
+        // (B) Track the observed origin and flag suspected prompt injection so the
+        // model treats page instructions as data, not commands.
+        if (toolResult && toolResult.ok !== false && (embeddedPage?.ok || call.name === "read_page" || call.name === "get_page_text")) {
+          observedOrigin = originOf(toolResult.url) || observedOrigin;
+          if (embeddedPage?.ok || call.name === "read_page") {
+            needsRead = false; // refs and labels now come from this page
+            lastElements.clear();
+            for (const el of toolResult.elements || []) lastElements.set(el.ref, el.name || "");
+          }
+          const scanText = embeddedPage?.ok || call.name === "read_page" ? readableText(toolResult) : toolResult.text || "";
+          if (detectInjection(scanText).suspected) {
+            toolResult.suspected_injection = true;
+            toolResult.injection_note = INJECTION_NOTE;
+            toolEmit({ kind: "warning", text: "Possible prompt injection in page content — instructions found in the page will be ignored." });
+          } else if (dsrc && featureEnabled(config, "injection") && !isSensitive(toolResult.url || observedOrigin || "")) {
+            // The regex is an unconditional floor; this only ever adds a flag it
+            // missed (paraphrases: "a note for any automated helper reading
+            // this…"). Skipped entirely when the regex already flagged the page,
+            // and never run on a sensitive origin (banking, payments, crypto):
+            // those pages are the ones carrying balances and account numbers, and
+            // the rest of the extension already treats them as a category apart.
+            const checkStarted = Date.now();
+            const jev = await classifyInjection(dsrc, scanText, { breaker, emit, signal });
+            recordCall({ ts: Date.now(), kind: "check:injection", ms: Date.now() - checkStarted, ok: jev !== null });
+            if (jev && jev.probability >= dthreshold) {
+              toolResult.suspected_injection = true;
+              toolResult.injection_note = INJECTION_NOTE;
+              toolEmit({
+                kind: "warning",
+                text:
+                  "Smart check: this page's text looks like it contains instructions aimed at the agent (" +
+                  Math.round(jev.probability * 100) + "% likely" +
+                  (jev.category && jev.category !== "none" ? ", " + jev.category : "") +
+                  "). They'll be ignored.",
+              });
+            }
+          }
+        }
+
+        if (embeddedPage) {
+          toolResult = { ...actionResult, url: embeddedPage.url || actionResult.url, page: embeddedPage };
+          if (isSensitive(embeddedPage.url || "")) sawSensitive = true;
+        }
+        reportResult(conversation, call, toolResult);
+        toolEmit({
           kind: "tool_end",
           name: call.name,
           ok: toolResult.ok !== false,
-          summary: toolResult.ok ? String(toolResult.result || "").slice(0, 60) : toolResult.error,
+          summary: summarizeResult(call.name, toolResult),
         });
-        continue;
-      }
-
-      // Permission gate for mutating actions — and, in allowlist site-access
-      // mode, for page reads too (the agent shouldn't even read an untrusted
-      // site; the resulting prompt doubles as the "trust this site" toggle).
-      const gateReads = config.settings.siteAccess === "allowlist" && PAGE_READ_TOOLS.has(call.name);
-      const isFocus = FOCUS_TOOLS.has(call.name);
-      // navigate (to a URL) and open_tab are judged by the site they load.
-      const loadsTarget =
-        call.name === "open_tab" || (call.name === "navigate" && !["back", "forward"].includes(call.args?.url));
-      // Tools that act on the page in the agent's tab (not on another tab or URL;
-      // back/forward move through history and need no fresh read).
-      const actsOnPage = MUTATING_TOOLS.has(call.name) && call.name !== "navigate" && !loadsTarget;
-      const gateReadsAll = PAGE_READ_TOOLS.has(call.name); // a block rule applies to reads in every mode
-      let runArgs = call.args || {};
-      if (MUTATING_TOOLS.has(call.name) || gateReadsAll || isFocus) {
-        let url = "";
-        let pageTitle = "";
-        let altUrl = ""; // switch_tab: a tab's pendingUrl, judged too
-        if (loadsTarget) {
-          url = normalizeTarget(call.args?.url);
-          if (!url) {
-            pushToolResult(conversation, call, { ok: false, error: "Only http(s) web addresses can be opened." });
-            emit({ kind: "tool_end", name: call.name, ok: false, summary: "blocked: not an http(s) address" });
-            continue;
-          }
-          runArgs = { ...runArgs, url }; // the tool loads exactly the URL that was gated
-        } else if (isFocus) {
-          let tab = null;
-          try {
-            tab = await chrome.tabs.get(Number(call.args?.tab_id));
-          } catch {
-            /* refused below: no tab, no switch */
-          }
-          if (!tab) {
-            pushToolResult(conversation, call, { ok: false, error: `No tab with id ${call.args?.tab_id}.` });
-            emit({ kind: "tool_end", name: call.name, ok: false, summary: "no such tab" });
-            continue;
-          }
-          url = tab.url || tab.pendingUrl || "";
-          altUrl = tab.pendingUrl && tab.pendingUrl !== url ? tab.pendingUrl : "";
-          pageTitle = tab.title || "";
-          runArgs = { ...runArgs, tab_id: tab.id };
-        } else {
-          try {
-            const tab = await chrome.tabs.get(focusedTabId);
-            url = tab.url || "";
-            pageTitle = tab.title || "";
-          } catch {
-            /* ignore */
-          }
-        }
-        const currentOrigin = originOf(url);
-
-        // (A0) After the tab or page changed under the agent, read before acting.
-        if (actsOnPage && needsRead) {
-          pushToolResult(conversation, call, {
-            ok: false,
-            error: "You are on a different page now. Call read_page before acting on it.",
-          });
-          emit({ kind: "tool_end", name: call.name, ok: false, summary: "blocked: read the new page first" });
-          emit({ kind: "warning", text: `Blocked ${call.name}: the agent moved to another page and hasn't read it yet.` });
-          continue;
-        }
-
-        // (A) Domain re-check: refuse to act if the page changed origin since it
-        // was last read (defends against redirects / injected navigation).
-        if (actsOnPage && observedOrigin && currentOrigin && currentOrigin !== observedOrigin) {
-          pushToolResult(conversation, call, {
-            ok: false,
-            error: `The page changed to ${currentOrigin} since you last read it (was ${observedOrigin}). Call read_page again before acting on this page.`,
-          });
-          emit({ kind: "tool_end", name: call.name, ok: false, summary: "blocked: page changed since last read" });
-          emit({ kind: "warning", text: `Blocked ${call.name}: the page changed origin (${observedOrigin} → ${currentOrigin}) since it was last read.` });
-          continue;
-        }
-
-        // (D) High-consequence actions (buy / pay / delete / …) always confirm,
-        // regardless of site or autonomy mode.
-        let forceSensitive = call.name === "fill_form" && (Array.isArray(call.args?.fields) ? call.args.fields : []).some(f => looksLikeSecret(f.value));
-        if (!gateReads && (call.name === "click_element" || call.name === "double_click")) {
-          if (isSensitiveActionText(lastElements.get(call.args?.ref))) forceSensitive = true;
-        }
-
-        let verdict = evaluate(call.name, url, config, sessionGrants);
-        let promptUrl = url; // the site the card names
-        if (altUrl) {
-          const alt = evaluate(call.name, altUrl, config, sessionGrants);
-          if (stricter(verdict, alt) === alt) {
-            verdict = alt;
-            promptUrl = altUrl;
-          }
-        }
-        // After a sensitive page, typing and scripts on any site can carry what
-        // was read there (a form post, a fetch), so they ask per action too.
-        if (sawSensitive && SEND_TOOLS.has(call.name) && verdict.decision !== "block") {
-          verdict = { decision: "prompt", sensitive: true, why: "The agent has been on a sensitive site in this chat (New chat resets this)" };
-        }
-        // Leaving a sensitive page (or any page after one): the destination URL
-        // could carry what was read there, so every navigation asks.
-        if (loadsTarget && verdict.decision !== "block" && (sawSensitive || isSensitive(await tabUrl(focusedTabId)))) {
-          verdict = { decision: "prompt", sensitive: true, why: "The agent has been on a sensitive site in this chat (New chat resets this)" };
-        }
-        if (forceSensitive && verdict.decision !== "block") {
-          verdict = { decision: "prompt", sensitive: true };
-        } else if (verdict.decision === "prompt" && !verdict.sensitive) {
-          // In plan mode, act freely on sites the user approved in the plan —
-          // never on a sensitive site, which asks per action. The host is the
-          // parsed one, so "chase.com?.approved.com" is chase.com.
-          const currentHost = hostOf(url);
-          const preApproved = currentHost && [...approvedHosts].some((h) => currentHost === h || currentHost.endsWith("." + h));
-          if (preApproved) verdict = { decision: "allow" };
-        }
-
-        // (E) Smart check: the regex above reads one English label, so it misses
-        // "Continue" on a checkout page or "Jetzt kaufen". Ask Jev only when the
-        // action would otherwise go through unasked — it can escalate to a
-        // confirmation, never relax one.
-        if (
-          !gateReads &&
-          !forceSensitive &&
-          verdict.decision === "allow" &&
-          dsrc &&
-          featureEnabled(config, "action") &&
-          MUTATING_TOOLS.has(call.name)
-        ) {
-          const label = actionLabel(call, lastElements);
-          // Keyed by the page, not just the origin: "Continue" on
-          // example.com/newsletter and on example.com/checkout are not the same
-          // question, and caching the first answer for the second is the miss
-          // that matters. The fragment is dropped — it never changes the action.
-          const key = call.name + "|" + url.split("#")[0] + "|" + label;
-          if (!actionChecks.has(key)) {
-            const checkStarted = Date.now();
-            actionChecks.set(
-              key,
-              await classifyAction(
-                dsrc,
-                { tool: call.name, url, title: pageTitle, label, userRequest },
-                { breaker, emit, signal },
-              ),
-            );
-            recordCall({ ts: Date.now(), kind: "check:action", ms: Date.now() - checkStarted, ok: actionChecks.get(key) !== null });
-          }
-          const r = actionChecks.get(key);
-          if (r && r.probability >= dthreshold) {
-            verdict = {
-              decision: "prompt",
-              sensitive: true,
-              smart: true,
-              why:
-                "Smart check rated this " +
-                (r.severity ? r.severity + "-consequence" : "risky") +
-                " (" + Math.round(r.probability * 100) + "% likely)",
-            };
-          }
-        }
-
-        // Batch mode ("Allow rest of task" on an earlier card): ordinary
-        // prompts become allows for the remainder of this run — new sites
-        // included. Sensitive verdicts (banking, high-consequence clicks,
-        // smart-check escalations, post-sensitive-site sends) and block rules
-        // are untouched: applyBatch only ever converts a plain "prompt".
-        if (batchMode) verdict = applyBatch(verdict);
-
-        if (verdict.decision === "block") {
-          pushToolResult(conversation, call, { ok: false, error: verdict.reason });
-          emit({ kind: "tool_end", name: call.name, ok: false, summary: verdict.reason });
-          continue;
-        }
-        if (verdict.decision === "prompt") {
-          const origin = originOf(promptUrl) || promptUrl;
-          const choice = await requestPermission({
-            origin,
-            toolName: call.name,
-            args: runArgs,
-            sensitive: !!verdict.sensitive,
-            newSite: !!verdict.newSite,
-            why: verdict.why || "",
-          });
-          if (choice === "steer") {
-            pushToolResult(conversation, call, { ok: false, error: "Superseded by user steering." });
-            continue;
-          }
-          if (choice === "decline") {
-            pushToolResult(conversation, call, {
-              ok: false,
-              error: "The user declined this action.",
-            });
-            emit({ kind: "tool_end", name: call.name, ok: false, summary: "Declined by user." });
-            emit({ kind: "done" });
-            return;
-          }
-          // The page may have changed while the card was open: act only on the
-          // site the user was asked about.
-          const checkTab = isFocus ? runArgs.tab_id : focusedTabId;
-          const nowOrigin = originOf(await tabUrl(checkTab));
-          if ((actsOnPage || gateReads || isFocus) && nowOrigin !== originOf(url) && nowOrigin !== originOf(altUrl || url)) {
-            pushToolResult(conversation, call, {
-              ok: false,
-              error: "The page changed while waiting for approval. Call read_page again.",
-            });
-            emit({ kind: "tool_end", name: call.name, ok: false, summary: "blocked: page changed during approval" });
-            needsRead = true;
-            continue;
-          }
-          // Sensitive actions always re-prompt — never persist or session-grant.
-          if (!verdict.sensitive) {
-            if (choice === "run") engageBatch();
-            if (choice === "always") await saveSitePermission(origin, "allow");
-            else sessionGrants.add(origin); // "once" and "run" both cover this site for the run
-          }
-        } else if (verdict.autoGranted) {
-          sessionGrants.add(currentOrigin);
-        }
-      }
-
-      if (steering.length) {
-        pushToolResult(conversation, call, { ok: false, error: "Superseded by a new user message before execution." });
-        continue;
-      }
-      // (C) Show the on-page activity indicator on the tab we're about to touch
-      // (hidden momentarily for screenshots so it isn't captured).
-      const overlayLabel = "OpenSidekick: " + call.name.replace(/_/g, " ");
-      const hideForShot = call.name === "take_screenshot";
-      touchedTabs.add(focusedTabId);
-      await setOverlay(focusedTabId, hideForShot ? "hide" : "show", overlayLabel);
-
-      executed.push(signature);
-      const toolStarted = Date.now();
-      let toolResult;
-      try {
-        toolResult = await executeTool(call.name, runArgs, ctx);
-      } catch (e) {
-        toolResult = { ok: false, error: String(e.message || e) };
-      }
-      recordCall({ ts: Date.now(), kind: "browser", tool: call.name,
-        ms: Date.now() - toolStarted, ok: toolResult.ok !== false });
-      if (hideForShot) await setOverlay(focusedTabId, "show", overlayLabel);
-
-      // A tool that returns an image (screenshot) can't carry it in an OpenAI
-      // tool result, so hold the image and attach it as a follow-up user
-      // message once every tool result for this turn is recorded.
-      if (toolResult && toolResult.image) {
-        pendingImages.push(toolResult.image);
-        toolResult = { ok: true, url: toolResult.url, note: toolResult.note || "Image attached below." };
-      }
-
-      // The agent is on another page now (or may be): forget the last read, and
-      // judge where it actually landed (a redirect, back/forward, a pending load).
-      if (call.name === "navigate" || call.name === "open_tab" || call.name === "switch_tab") {
-        needsRead = true;
-        observedOrigin = null;
-        lastElements.clear();
-        const landed = await tabUrl(focusedTabId);
-        if (isSensitive(landed) || isSensitive(toolResult?.url || "")) sawSensitive = true;
-      }
-      if (toolResult && isSensitive(toolResult.url || "")) sawSensitive = true;
-
-      let embeddedPage = null;
-      if ((runArgs.include_page || call.name === "fill_form") && !signal.aborted) {
-        const readUrl = await tabUrl(focusedTabId);
-        const readVerdict = evaluate("read_page", readUrl, config, sessionGrants);
-        if (readVerdict.decision === "allow") {
-          const readStarted = Date.now();
-          embeddedPage = await executeTool("read_page", { settle: true, expectedOrigin: originOf(readUrl) }, ctx);
-          recordCall({ ts: Date.now(), kind: "browser", tool: "read_page",
-            ms: Date.now() - readStarted, ok: embeddedPage.ok !== false });
-        } else {
-          toolResult.page_note = "Call read_page to request access to the resulting page.";
-        }
-      }
-      const actionResult = toolResult;
-      if (embeddedPage?.ok) toolResult = embeddedPage;
-
-      // (B) Track the observed origin and flag suspected prompt injection so the
-      // model treats page instructions as data, not commands.
-      if (toolResult && toolResult.ok !== false && (embeddedPage?.ok || call.name === "read_page" || call.name === "get_page_text")) {
-        observedOrigin = originOf(toolResult.url) || observedOrigin;
-        if (embeddedPage?.ok || call.name === "read_page") {
-          needsRead = false; // refs and labels now come from this page
-          lastElements.clear();
-          for (const el of toolResult.elements || []) lastElements.set(el.ref, el.name || "");
-        }
-        const scanText = embeddedPage?.ok || call.name === "read_page" ? readableText(toolResult) : toolResult.text || "";
-        if (detectInjection(scanText).suspected) {
-          toolResult.suspected_injection = true;
-          toolResult.injection_note = INJECTION_NOTE;
-          emit({ kind: "warning", text: "Possible prompt injection in page content — instructions found in the page will be ignored." });
-        } else if (dsrc && featureEnabled(config, "injection") && !isSensitive(toolResult.url || observedOrigin || "")) {
-          // The regex is an unconditional floor; this only ever adds a flag it
-          // missed (paraphrases: "a note for any automated helper reading
-          // this…"). Skipped entirely when the regex already flagged the page,
-          // and never run on a sensitive origin (banking, payments, crypto):
-          // those pages are the ones carrying balances and account numbers, and
-          // the rest of the extension already treats them as a category apart.
-          const checkStarted = Date.now();
-          const jev = await classifyInjection(dsrc, scanText, { breaker, emit, signal });
-          recordCall({ ts: Date.now(), kind: "check:injection", ms: Date.now() - checkStarted, ok: jev !== null });
-          if (jev && jev.probability >= dthreshold) {
-            toolResult.suspected_injection = true;
-            toolResult.injection_note = INJECTION_NOTE;
-            emit({
-              kind: "warning",
-              text:
-                "Smart check: this page's text looks like it contains instructions aimed at the agent (" +
-                Math.round(jev.probability * 100) + "% likely" +
-                (jev.category && jev.category !== "none" ? ", " + jev.category : "") +
-                "). They'll be ignored.",
-            });
-          }
-        }
-      }
-
-      if (embeddedPage) {
-        toolResult = { ...actionResult, url: embeddedPage.url || actionResult.url, page: embeddedPage };
-        if (isSensitive(embeddedPage.url || "")) sawSensitive = true;
-      }
-      pushToolResult(conversation, call, toolResult);
-      emit({
-        kind: "tool_end",
-        name: call.name,
-        ok: toolResult.ok !== false,
-        summary: summarizeResult(call.name, toolResult),
+      })().catch(error => {
+        reportResult(conversation, call, { ok: false, error: error.message || String(error) });
       });
+      if (started && !ended) emit({ kind: "tool_end", name: call.name, ok: captured?.ok === true,
+        summary: captured?.error || "Action ended" });
+      return captured || { ok: false, error: "Action did not complete." };
+    }
+    for (const call of result.toolCalls) {
+      await performCall(call);
+      if (halt) return;
     }
 
     if (pendingImages.length) {
@@ -915,6 +1000,8 @@ function readableText(r) {
 function actionLabel(call, lastElements) {
   const args = call.args || {};
   switch (call.name) {
+    case "pointer_action":
+      return String(args.target_label || "Unlabelled pointer target");
     case "navigate":
     case "open_tab":
       return String(args.url || "");
@@ -939,10 +1026,19 @@ function pushToolResult(conversation, call, result) {
 }
 
 // Keep tool results from blowing up the context window.
-function truncateForModel(result) {
+function truncateForModel(result, limit = 12000) {
   const s = JSON.stringify(result);
-  if (s.length <= 12000) return result;
-  return { ok: result.ok, note: "result truncated", preview: s.slice(0, 12000) };
+  if (s.length <= limit) return result;
+  // A large final observation must not erase the partial-execution ledger:
+  // the model needs this to avoid replaying work that already happened.
+  if (Array.isArray(result.results) && Number.isInteger(result.completed)) {
+    return { ok: result.ok, completed: result.completed, stopped_at: result.stopped_at,
+      error: result.error, note: "Step details or final observation truncated; do not replay completed steps.",
+      results: result.results.map(step => ({ ...truncateForModel(step, 200), index: step.index })),
+      ...(result.page ? { page: truncateForModel(result.page, 6000) } : {}),
+    };
+  }
+  return { ok: result.ok, note: "result truncated", preview: s.slice(0, limit) };
 }
 
 // Exported for the service worker, which uses it to rebuild the tool log
@@ -958,6 +1054,8 @@ export function summarizeResult(name, r) {
       return `clicked ${r.clicked || ""}`;
     case "type_text":
       return `typed "${(r.typed || "").slice(0, 40)}"${r.submitted ? " and submitted" : ""}`;
+    case "browser_sequence":
+      return `${r.completed} actions completed`;
     case "fill_form":
       return `filled ${(r.completed || []).length} fields`;
     case "select_option":

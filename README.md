@@ -64,6 +64,18 @@ genuinely agentic, and usable with any LLM — including fully local models.**
 - **Vision (on by default)** — the agent can capture a screenshot so a
   multimodal model can *see* the page (images, canvas apps, visual layout). Turn
   it off in Settings if you use a text-only model.
+- **Short action sequences** — up to 20 known clicks, text entries, keys,
+  selections, scrolls or drags per model call. Each step keeps the usual
+  permission checks; Stop, steering, stale targets or a changed document stop
+  the sequence and report completed actions. The panel shows step progress.
+  `fill_form` remains preferred for ordinary text fields. Most single actions
+  also accept `include_page` to avoid an extra observation round trip.
+- **Canvas input** — Advanced automation enables trusted insertion into the
+  focused editor; with Vision enabled too, screenshot coordinates support
+  clicks, double-clicks, scrolling and dragging. Coordinates use image pixels,
+  with tab/document and viewport checks. After scrolling, dragging or layout
+  changes, take a new screenshot. Unlabelled pointer targets require confirmation.
+  Browser pinch zoom must be reset before capturing actionable screenshots.
 - **Optional developer tools** — read the page's console messages and network
   requests to debug ("why is this page erroring?"), and a run-JavaScript escape
   hatch for when the other tools aren't enough. Both opt-in in Settings.

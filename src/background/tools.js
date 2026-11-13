@@ -4,7 +4,7 @@
 
 import { normalizeTarget } from "./permissions.js";
 import { MSG } from "../common/constants.js";
-import { readConsole, readNetwork, isAttached, sendKeyEvents, insertText } from "./cdp.js";
+import { readConsole, readNetwork, isAttached, sendKeyEvents, insertText, pointerInput } from "./cdp.js";
 
 export const TOOL_DEFS = [
   {
@@ -336,7 +336,123 @@ export const TOOL_DEFS = [
 // ctx: { getTabId, setTabId }  — the agent owns the "focused" tab id and can
 // change it (open_tab / switch_tab), so tools read/write it through ctx.
 
-const PAGE_ACTIONS = new Set(["click_element", "type_text", "select_option", "form_input", "navigate"]);
+const PAGE_ACTIONS = new Set(["click_element", "type_text", "select_option", "form_input", "navigate", "double_click", "right_click", "hover_element", "drag_element", "press_keys", "scroll", "pointer_action", "insert_text", "open_tab", "switch_tab"]);
+const pointerProperties = {
+  screenshot_id: { type: "string" },
+  action: { type: "string", enum: ["click", "double_click", "drag", "scroll"] },
+  x: { type: "number" }, y: { type: "number" },
+  to_x: { type: "number" }, to_y: { type: "number" },
+  delta_x: { type: "number" }, delta_y: { type: "number" },
+};
+TOOL_DEFS.push({
+  name: "pointer_action", visionOnly: true, cdpOnly: true,
+  description: "Trusted pointer action using pixels from a recent viewport screenshot. Stop and take another screenshot if layout, zoom or scroll changes. Drag requires to_x/to_y; scroll uses delta_x/delta_y in CSS pixels.",
+  parameters: { type: "object", properties: pointerProperties, required: ["screenshot_id", "action", "x", "y"], additionalProperties: false },
+}, {
+  name: "insert_text", cdpOnly: true,
+  description: "Insert text into the currently focused editable field or canvas editor using trusted browser input. Does not submit or change focus. Use type_text to replace a normal field by ref.",
+  parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"], additionalProperties: false },
+});
+export const SEQUENCE_ACTIONS = new Set(["click_element", "double_click", "type_text", "insert_text", "press_keys", "select_option", "scroll", "drag_element", "pointer_action"]);
+const sequenceSteps = TOOL_DEFS.filter(t => SEQUENCE_ACTIONS.has(t.name)).map(t => ({
+  type: "object", properties: { name: { type: "string", enum: [t.name] }, args: t.parameters },
+  required: ["name", "args"], additionalProperties: false,
+}));
+TOOL_DEFS.push({
+  name: "browser_sequence",
+  description: "Run 1–20 known actions sequentially with the same permission checks as single actions. No navigation, JavaScript, nested batches or tab switching. Stops at the first error or new user message. Returns per-step results, completed count, zero-based stopped_at (null on success), and a fresh page. Prefer fill_form for ordinary text fields. Do not batch unknown UI branches.",
+  parameters: { type: "object", properties: { actions: { type: "array", minItems: 1, maxItems: 20, items: { anyOf: sequenceSteps } } }, required: ["actions"], additionalProperties: false },
+});
+
+// Capture validity is private to a task; model-supplied metadata is never trusted.
+const captures = new WeakMap();
+export async function documentState(ctx, includeGeometry = false) {
+  const tabId = await ctx.getTabId();
+  const tab = await chrome.tabs.get(tabId);
+  const state = await csSend(tabId, { type: "cs_document_token", includeGeometry });
+  return { ...state, tabId, active: tab.active !== false, pending: !!tab.pendingUrl };
+}
+function validArguments(value, schema) {
+  if (schema.enum && !schema.enum.includes(value)) return false;
+  if (schema.type === "object") return value && typeof value === "object" && !Array.isArray(value) &&
+    (schema.required || []).every(key => Object.hasOwn(value, key)) &&
+    Object.entries(value).every(([key, item]) => schema.properties?.[key]
+      ? validArguments(item, schema.properties[key]) : schema.additionalProperties !== false);
+  if (schema.type === "array") return Array.isArray(value) && value.every(item => validArguments(item, schema.items));
+  if (schema.type === "integer") return Number.isInteger(value);
+  if (schema.type === "number") return Number.isFinite(value);
+  return !schema.type || typeof value === schema.type;
+}
+export function sameDocument(current, baseline) {
+  return current?.ok && !current.pending && current.tabId === baseline.tabId &&
+    current.token === baseline.token && current.url === baseline.url && current.active === baseline.active;
+}
+export function validateSequence(args, offered = TOOL_DEFS) {
+  if (!Array.isArray(args?.actions) || args.actions.length < 1 || args.actions.length > 20) return "Expected 1–20 actions.";
+  for (const step of args.actions) {
+    if (!step || !SEQUENCE_ACTIONS.has(step.name) || !offered.some(t => t.name === step.name)) return "Sequence contains an unavailable action.";
+    const definition = TOOL_DEFS.find(t => t.name === step.name);
+    if (!validArguments(step.args, definition.parameters)) return `Invalid arguments for ${step.name}.`;
+    if (step.name === "pointer_action" && step.args.action === "drag" &&
+        ![step.args.to_x, step.args.to_y].every(Number.isFinite)) return "Drag requires destination coordinates.";
+  }
+  return null;
+}
+export async function runSequence(args, { state, interrupted, perform, progress }) {
+  const results = [];
+  let baseline;
+  let failure;
+  try {
+    baseline = await state();
+    if (!baseline?.ok || baseline.pending) throw new Error("Cannot identify a stable document.");
+    for (let index = 0; index < args.actions.length; index++) {
+      progress(index, results.filter(r => r.ok).length);
+      if (interrupted()) { failure = "Interrupted by Stop or a new user message."; break; }
+      const current = await state();
+      if (!sameDocument(current, baseline)) {
+        failure = "Page or tab changed; observe it again before continuing."; break;
+      }
+      let result;
+      try { result = await perform(args.actions[index], index, baseline); }
+      catch (error) { result = { ok: false, error: error.message || String(error) }; }
+      results.push({ index, ...result });
+      if (!result?.ok) { failure = result?.error || "Action failed."; break; }
+      progress(index + 1, results.length);
+      if (!sameDocument(await state(), baseline)) { failure = "Page or tab changed after action; observe it again."; break; }
+    }
+  } catch (error) { failure = error.message || String(error); }
+  const completed = results.filter(r => r.ok).length;
+  return { ok: !failure, results, completed, stopped_at: failure ? completed : null, ...(failure ? { error: failure } : {}) };
+}
+
+async function pointerTarget(ctx, args) {
+  if (!ctx.cdpAllowed || !ctx.visionAllowed) return { ok: false, error: "Advanced automation and Vision are required." };
+  const capture = captures.get(ctx);
+  const state = await documentState(ctx, true);
+  if (!capture || capture.id !== args.screenshot_id || !state.ok || !state.active || state.pending ||
+      capture.tabId !== state.tabId || capture.token !== state.token || capture.url !== state.url ||
+      JSON.stringify(capture.viewport) !== JSON.stringify(state.viewport) || capture.geometry !== state.geometry || capture.layout !== state.layout) {
+    return { ok: false, error: "Screenshot is stale or belongs to a different tab. Capture a fresh screenshot." };
+  }
+  const point = (x, y) => {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= capture.width || y >= capture.height) throw new Error("Coordinates must be inside the screenshot.");
+    return { x: x * state.viewport.width / capture.width, y: y * state.viewport.height / capture.height };
+  };
+  try {
+    const from = point(args.x, args.y);
+    const to = args.action === "drag" ? point(args.to_x, args.to_y) : null;
+    if (!["click", "double_click", "drag", "scroll"].includes(args.action)) throw new Error("Unknown pointer action.");
+    if (args.action === "scroll" && ![args.delta_x ?? 0, args.delta_y ?? 0].every(Number.isFinite)) throw new Error("Scroll deltas must be finite.");
+    const target = await csSend(state.tabId, { type: "cs_inspect_target", x: from.x, y: from.y });
+    return { ...target, tabId: state.tabId, from, to };
+  } catch (error) { return { ok: false, error: error.message }; }
+}
+export async function inspectTarget(ctx, name, args) {
+  if (name === "pointer_action") return pointerTarget(ctx, args);
+  if (name === "insert_text") return csSend(await ctx.getTabId(), { type: "cs_inspect_focus" });
+  return csSend(await ctx.getTabId(), { type: "cs_inspect_target", ref: args.ref });
+}
+
 for (const tool of TOOL_DEFS) {
   if (PAGE_ACTIONS.has(tool.name)) {
     tool.parameters.properties.include_page = {
@@ -395,6 +511,21 @@ export async function executeTool(name, args, ctx) {
 
 async function executeAction(name, args, ctx) {
   switch (name) {
+    case "pointer_action": {
+      const target = await pointerTarget(ctx, args);
+      if (!target.ok) return target;
+      const result = await pointerInput(target.tabId, args.action, target.from, target.to, args, ctx.signal);
+      // Canvas panning may not generate a DOM scroll or resize event.
+      if (args.action === "scroll" || args.action === "drag") captures.delete(ctx);
+      return result;
+    }
+    case "insert_text": {
+      if (!ctx.cdpAllowed) return { ok: false, error: "Advanced automation is required." };
+      if (typeof args.text !== "string") return { ok: false, error: "text must be a string." };
+      const focus = await inspectTarget(ctx, name, args);
+      if (!focus.ok) return focus;
+      return insertText(await ctx.getTabId(), args.text);
+    }
     case "read_page":
       return await csSend(await ctx.getTabId(), { type: MSG.CS_READ_PAGE });
     case "get_page_text":
@@ -488,7 +619,8 @@ async function pressKeys(ctx, args) {
   if (ctx.cdpAllowed || isAttached(tabId)) {
     if (args.ref != null) {
       // Focus the target element first; CDP keys land in whatever is focused.
-      await csSend(tabId, { type: MSG.CS_ACT, action: "focus", ref: args.ref });
+      const focus = await csSend(tabId, { type: MSG.CS_ACT, action: "focus", ref: args.ref });
+      if (!focus?.ok) return focus;
     }
     return sendKeyEvents(tabId, keys);
   }
@@ -755,6 +887,7 @@ async function screenshot(ctx) {
   // send the actual full-resolution image instead of a viewport screenshot.
   // A viewport shot of an image document is the picture shrunk onto the
   // browser's gray backdrop, which reads poorly for the model.
+  captures.delete(ctx);
   const direct = await fetchDirectImage(tab.url || "");
   if (direct) {
     return { ok: true, url: tab.url, image: direct, note: "Loaded the full-resolution image from this tab." };
@@ -762,9 +895,21 @@ async function screenshot(ctx) {
 
   try {
     // captureVisibleTab grabs the active tab of the window as a PNG data URL.
+    const before = await documentState(ctx, true);
+    if (!before.ok || !before.active || before.pending) return { ok: false, error: "Activate the stable target tab before capturing." };
+    if (before.viewport.scale !== 1) return { ok: false, error: "Reset browser pinch zoom before capturing actionable coordinates." };
     const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+    const after = await documentState(ctx, true);
+    if (JSON.stringify(before) !== JSON.stringify(after)) return { ok: false, error: "Page changed during capture; retry." };
     const data = dataUrl.split(",")[1];
-    return { ok: true, url: tab.url, image: { mediaType: "image/png", data }, note: "Screenshot captured." };
+    const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    const capture = { id: crypto.randomUUID(), width: bitmap.width, height: bitmap.height, ...after };
+    bitmap.close();
+    captures.set(ctx, capture);
+    return { ok: true, url: tab.url, screenshot_id: capture.id, width: capture.width, height: capture.height,
+      viewport: capture.viewport, tab_id: tabId, document_token: capture.token,
+      image: { mediaType: "image/png", data }, note: "Viewport screenshot; pointer coordinates use these image pixels." };
   } catch (e) {
     return {
       ok: false,

@@ -598,6 +598,9 @@ function handleEvent(ev) {
     case "assistant_end":
       endAssistant(ev.content);
       break;
+    case "sequence_progress":
+      setStatus(`Action ${Math.min(ev.index + 1, ev.total)}/${ev.total} · ${ev.completed} completed`);
+      break;
     case "tool_start":
       addToolStart(ev.name, ev.args);
       break;

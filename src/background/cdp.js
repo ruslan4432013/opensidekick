@@ -302,3 +302,42 @@ function sendCommand(tabId, method, params) {
     });
   });
 }
+
+// Trusted mouse input for canvas applications. Always release the button, even
+// when Stop interrupts a drag, so the user's pointer is not left pressed.
+export async function pointerInput(tabId, action, from, to, args = {}, signal) {
+  let pressed = false;
+  let position = from;
+  const send = event => sendCommand(tabId, "Input.dispatchMouseEvent", { ...position, ...event });
+  const cancelled = () => { if (signal?.aborted) throw new Error("Cancelled"); };
+  try {
+    cancelled();
+    await ensureAttached(tabId);
+    cancelled();
+    await send({ type: "mouseMoved" });
+    if (action === "scroll") {
+      await send({ type: "mouseWheel", deltaX: args.delta_x || 0, deltaY: args.delta_y || 0 });
+    } else {
+      const count = action === "double_click" ? 2 : 1;
+      for (let clickCount = 1; clickCount <= count; clickCount++) {
+        cancelled();
+        await send({ type: "mousePressed", button: "left", buttons: 1, clickCount });
+        pressed = true;
+        if (action === "drag") {
+          for (let step = 1; step <= 8; step++) {
+            cancelled();
+            position = { x: from.x + (to.x - from.x) * step / 8, y: from.y + (to.y - from.y) * step / 8 };
+            await send({ type: "mouseMoved", button: "left", buttons: 1 });
+          }
+        }
+        await send({ type: "mouseReleased", button: "left", buttons: 0, clickCount });
+        pressed = false;
+      }
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error.message || String(error) };
+  } finally {
+    if (pressed) await send({ type: "mouseReleased", button: "left", buttons: 0, clickCount: 1 }).catch(() => {});
+  }
+}

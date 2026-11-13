@@ -3,6 +3,13 @@
 All notable changes to OpenSidekick are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.12.0] — 2026-11-13
+
+- Run up to 20 known browser actions in one sequence, with a fresh page returned at the end and live step/completion progress in the panel. Ordinary text forms still use `fill_form`.
+- With Advanced automation and Vision enabled, click, double-click, scroll and drag using screenshot coordinates. Advanced automation also enables text insertion into the focused editor.
+- Screenshots identify their tab, document, viewport and image dimensions. Changed documents, stale targets and changed layout stop a sequence; Stop and new messages preserve completed steps without replaying them.
+- Every step keeps the existing permission checks. More individual actions support `include_page`, and action, observation and model durations remain in the device-only activity log.
+
 ## [0.11.1] — 2026-11-13
 
 - Running tools now show a live `wait` counter in seconds. The counter stops when the action finishes or the task stops.
