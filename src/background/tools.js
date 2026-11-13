@@ -225,10 +225,13 @@ export const TOOL_DEFS = [
       "escape hatch for reading or manipulating the page when the other tools " +
       "aren't enough. Works on pages that enforce Trusted Types CSP " +
       "(Google Docs and other Google apps): the required bypass policy is " +
-      "installed automatically before the code runs.",
+      "installed automatically before the code runs. Supports await; use return " +
+      "to provide the final value. Use Promise.all for independent async operations " +
+      "or Promise.allSettled to collect successes and failures. This does not " +
+      "parallelize CPU work or DOM changes.",
     parameters: {
       type: "object",
-      properties: { code: { type: "string", description: "JavaScript to run in the page. Use return to return a value." } },
+      properties: { code: { type: "string", description: "Async JavaScript function body to run in the page. Supports await; use return to return a value." } },
       required: ["code"],
       additionalProperties: false,
     },
@@ -691,7 +694,7 @@ async function runJavascript(ctx, code) {
       target: { tabId },
       world: "MAIN",
       args: [String(code || "")],
-      func: (src) => {
+      func: async (src) => {
         try {
           // Pages that enforce Trusted Types via CSP
           // (require-trusted-types-for 'script' — Google Docs and other
@@ -713,8 +716,9 @@ async function runJavascript(ctx, code) {
               });
             }
           } catch { /* allowlisted policy names: keep going */ }
-          // Function body so `return` works; runs in the page's global scope.
-          const out = new Function(src)();
+          // Await before serialization so returned promises and rejections are handled.
+          const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+          const out = await new AsyncFunction(src)();
           let serialized;
           try {
             serialized = out === undefined ? "undefined" : JSON.stringify(out);

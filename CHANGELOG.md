@@ -3,6 +3,14 @@
 All notable changes to OpenSidekick are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.11.1] — 2026-11-13
+
+- Running tools now show a live `wait` counter in seconds. The counter stops when the action finishes or the task stops.
+
+## [0.11.0] — 2026-11-13
+
+- Page JavaScript now supports await and returns completed asynchronous results. Use Promise.all to run independent async operations together, or Promise.allSettled to collect successes and failures.
+
 ## [0.10.0] — 2026-11-13
 
 - Send a message during a task to steer the next actions, without switching modes.

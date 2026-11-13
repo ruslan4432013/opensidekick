@@ -80,6 +80,7 @@ let running = false;
 let newChatPending = false;
 let current = null; // { el, raw } assistant bubble being streamed
 let pendingTools = []; // log rows awaiting their matching tool_end
+let toolWaitTimer = null;
 let logGroup = null; // the open <details> run of consecutive tool rows
 
 // The copy control's feedback, keyed by state. Label and accessible name come from
@@ -554,6 +555,7 @@ function newChat() {
 }
 
 function clearTranscript() {
+  stopToolWaits();
   els.messages.querySelectorAll(".msg, .log, .note, .alert, .perm-card, .thinking").forEach((n) => n.remove());
   current = null;
   pendingTools = [];
@@ -632,6 +634,7 @@ function handleEvent(ev) {
       setRunning(false);
       break;
     case "done":
+      stopToolWaits();
       flushHeldSwitch();
       break;
     case "idle":
@@ -649,6 +652,7 @@ function setRunning(v) {
   els.send.hidden = false;
   if (v) setStatus("Working…");
   else {
+    stopToolWaits();
     endAssistant();
     els.messages.querySelectorAll(".thinking").forEach(node => node.closest(".msg")?.remove());
     clearStatus();
@@ -797,14 +801,37 @@ function addToolStart(name, args) {
   logSummary(g);
   const row = document.createElement("div");
   row.className = "log-row running";
-  row.innerHTML = logRow(name, argHint(name, args), "");
+  row.innerHTML = logRow(name, argHint(name, args), "wait 0s");
   g.rows.appendChild(row);
   pendingTools.push({ name, el: row, t0: performance.now() });
+  if (toolWaitTimer === null) {
+    toolWaitTimer = setInterval(() => {
+      for (const pending of pendingTools) {
+        pending.el.querySelector(".log-dur").textContent = `wait ${Math.floor((performance.now() - pending.t0) / 1000)}s`;
+      }
+    }, 1000);
+  }
   scroll();
 }
 
+function stopToolWaits() {
+  clearInterval(toolWaitTimer);
+  toolWaitTimer = null;
+  // A stop or error may leave tools without a tool_end event.
+  for (const pending of pendingTools) {
+    pending.el.classList.remove("running");
+    pending.el.querySelector(".log-dur").textContent = fmtDur(performance.now() - pending.t0);
+  }
+  pendingTools = [];
+}
+
 function addToolEnd(name, ok, summary) {
-  const pending = pendingTools.shift();
+  const index = pendingTools.findIndex(pending => pending.name === name);
+  const pending = index === -1 ? null : pendingTools.splice(index, 1)[0];
+  if (!pendingTools.length) {
+    clearInterval(toolWaitTimer);
+    toolWaitTimer = null;
+  }
   let row = pending && pending.el;
   if (!row) {
     const g = openLog();
