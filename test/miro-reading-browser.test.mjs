@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { executeTool } from '../src/background/tools.js';
 const browser = await chromium.launch({ headless: true });
@@ -143,4 +144,41 @@ try {
   assert.equal(result.ok, false);
   assert.match(result.error, /three attempts/);
   console.log('PASS targeted panel scrolling, middle-button canvas panning, actual movement and bounded no-progress navigation');
+
+  const addVisual = () => {
+    const root = document.getElementById('a11y-dom-contents');
+    document.getElementById('a11y-dom-explore').setAttribute('aria-expanded', 'true');
+    root.innerHTML = '<div id="a11y-dom-10001" aria-label="Empty, Grid, 1 of 1" style="width:400px;height:200px">Empty</div>';
+    window.chrome = { runtime: { onMessage: { addListener: f => window.handleMessage = f } } };
+  };
+  await page.evaluate(addVisual);
+  await page.addScriptTag({ path: 'src/content/content-script.js' });
+  const inventory = await run('list_miro_objects');
+  assert.equal(inventory.objects[0].type, 'Grid');
+  assert.equal(inventory.objects[0].object_id, '10001');
+  assert.equal((await run('inspect_miro_object', { object_id: '../evil' })).ok, false);
+  assert.equal((await run('inspect_miro_object', { object_id: '88888' })).ok, false);
+  assert.equal((await executeTool('inspect_miro_object', { object_id: '10001' }, { ...ctx, visionAllowed: false })).ok, false);
+  let navigations = 0;
+  chrome.tabs.update = async (_, options) => {
+    navigations++;
+    await page.goto(options.url);
+    await page.evaluate(addVisual);
+    await page.addScriptTag({ content: await readFile('src/content/content-script.js', 'utf8') });
+  };
+  chrome.tabs.onUpdated = { addListener() {}, removeListener() {} };
+  chrome.tabs.get = async () => ({ id: 700, active: true, windowId: 1, url: page.url(), status: 'complete' });
+  await page.evaluate(() => { const input = document.createElement('textarea'); document.body.append(input); input.focus(); });
+  assert.match((await run('inspect_miro_object', { object_id: '10001' })).error, /Finish the focused editor/);
+  assert.equal(navigations, 0);
+  await page.evaluate(() => document.activeElement.blur());
+  result = await run('inspect_miro_object', { object_id: '10001' });
+  assert(result.ok, JSON.stringify(result));
+  assert.equal(navigations, 1);
+  assert.equal(new URL(page.url()).searchParams.get('moveToWidget'), '10001');
+  assert.equal(result.object.object_id, '10001');
+  assert(result.image.data.length > 100 && result.screenshot_id);
+  assert.equal((await executeTool('inspect_miro_object', { object_id: '10001' }, { ...ctx, signal: AbortSignal.abort() })).ok, false);
+  assert.equal(navigations, 1);
+  console.log('PASS visual inventory, same-board focused screenshot, invalid IDs, Vision gate, active editor and cancellation');
 } finally { await browser.close(); }

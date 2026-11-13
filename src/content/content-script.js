@@ -99,6 +99,9 @@
         case "cs_get_text":
           readText(msg).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
           return true;
+        case "cs_miro_inventory":
+          readText({ ...msg, inventory: true }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
+          return true;
         case "cs_navigation_state":
           navigationState(msg).then(sendResponse);
           return true;
@@ -361,7 +364,7 @@
     }
     const contents = document.getElementById("a11y-dom-contents");
     if (!contents || toggle.getAttribute("aria-expanded") !== "true") return { ok: false, error: "Could not expand Miro's read-only overview." };
-    const records = [], missing = [];
+    const records = [], missing = [], visualObjects = [];
     const walk = (parent, parentId, x, y) => {
       const children = Array.from(parent.children).filter(el => /^a11y-dom-(?:\d|comment-)/.test(el.id) && !el.id.endsWith("-heading"));
       const expected = Math.max(0, ...children.map(el => Number((el.getAttribute("aria-label") || "").match(/, \d+ of (\d+)$/)?.[1] || 0)));
@@ -370,6 +373,9 @@
         const id = el.id.replace("a11y-dom-", "");
         const px = x + (parseFloat(el.style.left) || 0), py = y + (parseFloat(el.style.top) || 0);
         const label = (el.getAttribute("aria-label") || el.textContent || "").replace(/\s+/g, " ").trim();
+        const type = label.match(/, (Image|Grid|Embed|Diagram),/)?.[1];
+        if (type) visualObjects.push({ object_id: id, parent_id: parentId, type, label: label.slice(0, 240),
+          board_bounds: { x: px, y: py, width: parseFloat(el.style.width) || 0, height: parseFloat(el.style.height) || 0 } });
         records.push("[" + id + " parent=" + parentId + " xy=" + Math.round(px) + "," + Math.round(py) + "] " + label);
         walk(el, id, px, py);
       }
@@ -377,6 +383,15 @@
     };
     const topLevel = walk(contents, "board", 0, 0);
     if (!topLevel) return { ok: false, error: "The board overview is empty or still loading. Full-board coverage is not established." };
+    if (msg.inventory) {
+      const focused = document.activeElement;
+      const editing = !!focused && (focused.isContentEditable || /^(INPUT|TEXTAREA)$/.test(focused.tagName)) &&
+        !focused.closest('#opensidekick-overlay');
+      const objects = msg.object_id ? visualObjects.filter(item => item.object_id === msg.object_id) : visualObjects;
+      return { ok: true, url: location.href, document_token: documentToken, editing, objects,
+        total: visualObjects.length, top_level_objects: topLevel,
+        note: "These are visual objects, NOT their contents. Grid labels such as Empty do not describe cells. Use inspect_miro_object for each relevant object, transcribe visible cells/images, and keep an ID-based evidence ledger. Embeds may require opening their source through normal permitted browser tools." };
+    }
     let selected = records;
     // Stable object IDs let the model recover a specific section after
     // compaction without replaying every preceding page of the board.

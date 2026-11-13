@@ -13,9 +13,23 @@ export function isMiroUrl(url) {
   } catch { return false; }
 }
 
-export const MIRO_INPUT_GUIDANCE = "On Miro, for reading or summarizing FIRST use get_page_text(offset:0), then follow snapshot_id and next_offset until all_text_delivered. It includes offscreen objects and nested frames; the Frames sidebar and viewport are NOT the full board. Do not scroll, find or repeat screenshots to collect text. Preserve per-page facts and IDs. Report missing_groups and image/embed/grid limitations honestly. For navigation, scroll uses wheel events over the actual panel; pan uses middle-button dragging on canvas without moving objects. If changed:false, retarget from a fresh screenshot instead of repeating. On Miro, run_javascript is unavailable. Use take_screenshot, then pointer_action with that screenshot_id for clicks, double-clicks and drags. Coordinates are pixels in the original screenshot: do not divide by DPR or apply Miro's canvas zoom yourself. Use insert_text for the focused editor and press_keys for keyboard input. Take a new screenshot after panning, zooming or an uncertain UI change, and verify the visible result. If pointer_action is unavailable, ask to enable Advanced automation and Vision; do not emulate clicks with JavaScript.";
+function isMiroBoardUrl(url) {
+  return isMiroUrl(url) && new URL(url).pathname.startsWith("/app/board/");
+}
+
+export const MIRO_INPUT_GUIDANCE = "On Miro, for a targeted edit with a known object_id use read_page then inspect_miro_object directly; do NOT paginate the whole board. Only for whole-board reading or summarizing FIRST use get_page_text(offset:0), then follow snapshot_id and next_offset until all_text_delivered. It includes offscreen objects and nested frames; the Frames sidebar and viewport are NOT the full board. Do not scroll, find or repeat screenshots to collect text. Preserve per-page facts and IDs. After text coverage, call list_miro_objects and inspect_miro_object for relevant images, Grid tables and diagrams. Empty Grid labels are NOT cell contents. Transcribe each visual object into a short evidence row keyed by object_id BEFORE the next inspection; preserve every previously read work as a separate row in the final table; visual additions supplement rather than replace text evidence. Assign work numbers only from explicit board headings, never from object order or guessed image ownership. Do not edit based on labels alone. For cell edits inspect the table first, use screenshot coordinates, double-click the target cell, press_keys Meta+A followed by insert_text, Escape, then verify a fresh screenshot. Report missing_groups and genuinely unreadable/external embed content honestly. For navigation, scroll uses wheel events over the actual panel; pan uses middle-button dragging on canvas without moving objects. If changed:false, retarget from a fresh screenshot instead of repeating. On Miro, run_javascript is unavailable. Use take_screenshot, then pointer_action with that screenshot_id for clicks, double-clicks and drags. Coordinates are pixels in the original screenshot: do not divide by DPR or apply Miro's canvas zoom yourself. Use insert_text for the focused editor and press_keys for keyboard input. Take a new screenshot after panning, zooming or an uncertain UI change, and verify the visible result. If pointer_action is unavailable, ask to enable Advanced automation and Vision; do not emulate clicks with JavaScript.";
 
 export const TOOL_DEFS = [
+  {
+    name: "list_miro_objects",
+    description: "Inventory Miro images, native Grid tables, diagrams and embeds, including offscreen objects. Returns IDs, parent IDs and board bounds, not their contents. Use inspect_miro_object to read them visually; never interpret an Empty Grid label as empty cells.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "inspect_miro_object", visionOnly: true,
+    description: "Focus a known Miro image/table/diagram/embed by object_id using its same-board deep link, then attach a fresh readable screenshot. Reloads the current board view; finish editing first. Read/transcribe the image and record facts with the ID before proceeding. Returns actionable screenshot coordinates. Embedded source documents are not automatically opened. Do not claim unreadable text was read.",
+    parameters: { type: "object", properties: { object_id: { type: "string", pattern: "^[0-9]+$" } }, required: ["object_id"], additionalProperties: false },
+  },
   {
     name: "read_page",
     description:
@@ -537,6 +551,11 @@ export async function executeTool(name, args, ctx) {
 
 async function executeAction(name, args, ctx) {
   switch (name) {
+    case "list_miro_objects":
+      if (!isMiroBoardUrl((await chrome.tabs.get(await ctx.getTabId())).url)) return { ok: false, error: "This tool requires a Miro board." };
+      return await csSend(await ctx.getTabId(), { type: "cs_miro_inventory" });
+    case "inspect_miro_object":
+      return await inspectMiroObject(ctx, args.object_id);
     case "pointer_action": {
       const target = await pointerTarget(ctx, args);
       if (!target.ok) return target;
@@ -763,6 +782,51 @@ async function csSend(tabId, msg) {
         "Chrome Web Store, or a PDF), or it navigated away.",
     };
   }
+}
+
+async function inspectMiroObject(ctx, objectId) {
+  if (!ctx.visionAllowed) return { ok: false, error: "Enable Vision to read visual board objects." };
+  if (!/^\d+$/.test(objectId || "")) return { ok: false, error: "Expected a numeric object ID from list_miro_objects." };
+  const tabId = await ctx.getTabId();
+  const initial = await chrome.tabs.get(tabId);
+  if (!isMiroBoardUrl(initial.url) || !initial.active || initial.pendingUrl) return { ok: false, error: "Activate a stable Miro board first." };
+  const inventory = await csSend(tabId, { type: "cs_miro_inventory", object_id: objectId });
+  const object = inventory.objects?.[0];
+  if (!inventory.ok || !object) return { ok: false, error: inventory.error || "Object ID is not a visual object on this board." };
+  if (inventory.editing) return { ok: false, error: "Finish the focused editor with Escape before focusing another board object." };
+  const url = new URL(initial.url);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("moveToWidget", objectId);
+  url.searchParams.set("cot", "14");
+  if (ctx.signal?.aborted) return { ok: false, error: "Cancelled" };
+  // A validated same-board deep link fits the object without editing it or
+  // guessing canvas coordinates. Never navigate to a model-provided host.
+  const current = await chrome.tabs.get(tabId);
+  if (current.url !== initial.url || !current.active || await ctx.getTabId() !== tabId) return { ok: false, error: "The target tab changed before inspection." };
+  captures.delete(ctx);
+  if (ctx.cdpAllowed) await ensureAttached(tabId);
+  if (ctx.signal?.aborted) return { ok: false, error: "Cancelled" };
+  const stable = await documentState(ctx);
+  if (!stable.ok || stable.tabId !== tabId || stable.token !== inventory.document_token || stable.url !== initial.url || !stable.active || stable.pending) {
+    return { ok: false, error: "The document changed before inspection." };
+  }
+  await chrome.tabs.update(tabId, { url: url.href });
+  await waitForLoad(tabId, 15000, ctx.signal);
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline && !ctx.signal?.aborted) {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab.active || await ctx.getTabId() !== tabId || tab.url !== url.href) return { ok: false, error: "The board changed during inspection." };
+    const ready = await csSend(tabId, { type: "cs_miro_inventory", object_id: objectId });
+    if (ready.ok && ready.objects?.length && ready.document_token !== inventory.document_token) {
+      const shot = await screenshot(ctx);
+      if (shot.ok) return { ...shot, object,
+        note: "Read the attached object screenshot now; transcribe table headers and cells or image text with this object ID. A screenshot is visual evidence, not an automatic OCR result. Use zoom for small details. Report obscured/unreadable regions. Pointer coordinates use the original screenshot pixels; never use board_bounds as pointer coordinates." };
+    }
+    // Wait only while the target document/outline is not ready or capture is unstable.
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  return { ok: false, error: ctx.signal?.aborted ? "Cancelled" : "Board inspection did not stabilize. Use read_page/take_screenshot to diagnose; do not repeatedly navigate." };
 }
 
 async function navigate(ctx, target) {

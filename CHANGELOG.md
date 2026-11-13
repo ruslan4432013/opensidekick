@@ -3,6 +3,11 @@
 All notable changes to OpenSidekick are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.14.0] — 2026-11-14
+
+- Miro images, native tables, diagrams and embeds can now be inventoried and opened at readable scale for the configured vision model. Empty table labels are no longer treated as empty cells.
+- Visual inspections return fresh actionable screenshots and keep object IDs for source tracking. External embeds and unreadable areas are reported explicitly rather than assumed complete.
+
 ## [0.13.0] — 2026-11-14
 
 - Miro board reading now uses the full accessible outline, including offscreen objects and nested frames, with continuation pages and explicit coverage counts. Individual sections can be recovered by object ID after context compaction. Repeated pages are detected instead of silently returning the same truncated text.

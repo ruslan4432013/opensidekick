@@ -24,6 +24,7 @@ export const MUTATING_TOOLS = new Set([
   "insert_text",
   "select_option",
   "navigate",
+  "inspect_miro_object",
   "open_tab",
   "scroll",
   "hover_element",
@@ -41,6 +42,7 @@ export const MUTATING_TOOLS = new Set([
 export const PAGE_READ_TOOLS = new Set([
   "read_page",
   "get_page_text",
+  "list_miro_objects",
   "take_screenshot",
   "read_console",
   "read_network",

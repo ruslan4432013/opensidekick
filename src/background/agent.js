@@ -873,6 +873,11 @@ export async function runAgent(deps) {
           const landed = await tabUrl(focusedTabId);
           if (isSensitive(landed) || isSensitive(toolResult?.url || "")) sawSensitive = true;
         }
+        if (call.name === "inspect_miro_object") {
+          lastElements.clear();
+          needsRead = !toolResult?.ok;
+          observedOrigin = toolResult?.ok ? originOf(toolResult.url) : null;
+        }
         if (toolResult && isSensitive(toolResult.url || "")) sawSensitive = true;
 
         let embeddedPage = null;
@@ -1054,6 +1059,10 @@ function truncateForModel(result, limit = 12000) {
 export function summarizeResult(name, r) {
   if (r.ok === false) return r.error || "failed";
   switch (name) {
+    case "list_miro_objects":
+      return `inventoried ${r.objects?.length || 0} visual objects`;
+    case "inspect_miro_object":
+      return `inspected ${r.object?.type || "object"} ${r.object?.object_id || ""}`;
     case "read_page":
       return `read page — ${(r.elements || []).length} interactive elements`;
     case "get_page_text":

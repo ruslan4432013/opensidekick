@@ -11,6 +11,9 @@ const cfg = (siteAccess, autonomy, sitePermissions = {}) => ({
   settings: { siteAccess, autonomy },
 });
 const none = new Set();
+ok(PAGE_READ_TOOLS.has("list_miro_objects"), "Miro inventory obeys page-read permissions");
+ok(MUTATING_TOOLS.has("inspect_miro_object"), "Miro focused inspection obeys navigation permissions");
+ok(evaluate("inspect_miro_object", "https://miro.com/app/board/test", cfg("all", "auto", { "https://miro.com": "block" }), none).decision === "block", "blocked Miro inspection cannot navigate or capture");
 const URL_A = "https://example.com/page";
 
 // --- Default ("all") mode: unchanged behavior ---

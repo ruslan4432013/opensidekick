@@ -69,6 +69,7 @@ Rules:
 - Keep each section concise. Use terse, single-line bullets, not prose paragraphs or nested lists.
 - Preserve exact URLs, element refs, selectors, commands, error strings, and identifiers.
 - For paginated board reading preserve snapshot_id, next_unread_offset, coverage counts, and a concise row of facts for EVERY work/section already read. Never replace collected rows with just "read the board".
+- For visual Miro inspections preserve inspected object IDs with transcribed facts, unreadable regions and the remaining IDs. For table edits preserve column/row identifiers, exact replacement text and which rows were verified; never repeat completed edits.
 - Carry forward only requests that remain unanswered or need further action; do not repeat ones that newer history has resolved.
 - Approaches that were tried and failed belong in Decisions, with the reason, so they are not retried.
 - Do not mention the summary process or that context was compacted.
